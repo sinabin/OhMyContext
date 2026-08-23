@@ -17,6 +17,12 @@ const api = {
   fetch: (documentId: string, chunkId: string) =>
     ipcRenderer.invoke("vault:fetch", { documentId, chunkId }) as Promise<FetchResponse | null>,
   listSources: () => ipcRenderer.invoke("vault:list-sources") as Promise<SourcesResponse>,
+  prepareSourcePurge: (sourceId: string) =>
+    ipcRenderer.invoke("vault:prepare-source-purge", sourceId) as Promise<PrepareSourcePurgeResponse>,
+  purgeSource: (input: PurgeSourceInput) =>
+    ipcRenderer.invoke("vault:purge-source", input) as Promise<PurgeSourceResponse>,
+  listDeletionReceipts: () =>
+    ipcRenderer.invoke("vault:list-deletion-receipts") as Promise<DeletionReceiptsResponse>,
   previewCodexConnection: () =>
     ipcRenderer.invoke("connection:codex-preview") as Promise<CodexConnectionPreview>,
   applyCodexConnection: () =>
@@ -92,6 +98,62 @@ export interface VaultSource {
 
 export interface SourcesResponse {
   sources: VaultSource[];
+}
+
+export interface SourcePurgePreview {
+  sourceId: string;
+  name: string;
+  rootUri: string;
+  documentCount: number;
+  lastScannedAt: string | null;
+  confirmationToken: string;
+}
+
+export type PrepareSourcePurgeResponse =
+  | { status: "ready"; preview: SourcePurgePreview }
+  | { status: "not-found" }
+  | { status: "import-in-progress" };
+
+export interface PurgeSourceInput {
+  sourceId: string;
+  confirmationToken: string;
+  expectedDocumentCount: number;
+  expectedLastScannedAt: string | null;
+}
+
+export interface DeletionReceipt {
+  receiptId: string;
+  targetKind: "source";
+  targetId: string;
+  completedAt: string;
+  sourceCount: number;
+  documentCount: number;
+  revisionCount: number;
+  chunkCount: number;
+  ftsEntryCount: number;
+  retrievalEventCount: number;
+  assurance: "logical-non-addressability";
+  originalFilesModified: false;
+  secureEraseClaimed: false;
+}
+
+export interface DeletionReceiptView extends DeletionReceipt {
+  verificationStatus:
+    | "verified"
+    | "target-reintroduced"
+    | "integrity-error"
+    | "not-found";
+}
+
+export type PurgeSourceResponse =
+  | { status: "purged"; receipt: DeletionReceipt }
+  | { status: "not-found" }
+  | { status: "import-in-progress" }
+  | { status: "stale-confirmation" }
+  | { status: "canceled" };
+
+export interface DeletionReceiptsResponse {
+  receipts: DeletionReceiptView[];
 }
 
 export interface CodexConnectionPreview {

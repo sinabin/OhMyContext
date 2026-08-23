@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -13,6 +14,8 @@ import { chunkDocument, normalizeText, titleFromText } from "./chunking.js";
 import { assertHashId, contentHash, deterministicId } from "./ids.js";
 import { initializeSchema } from "./schema.js";
 import type {
+  DeletionReceipt,
+  DeletionReceiptVerification,
   FetchDocumentInput,
   FetchedChunk,
   ImportDirectoryOptions,
@@ -20,7 +23,11 @@ import type {
   ImportProgress,
   ImportIssue,
   ImportedDocument,
+  PrepareSourcePurgeResult,
+  PurgeSourceInput,
+  PurgeSourceResult,
   SearchVaultInput,
+  SourcePurgePreview,
   Vault,
   VaultFetchResult,
   VaultSearchResult,
@@ -97,6 +104,47 @@ interface SourceRow {
   created_at: string;
   last_scanned_at: string | null;
   document_count: number | bigint;
+}
+
+interface SourcePurgeRow {
+  id: string;
+  display_name: string;
+  root_uri: string;
+  last_scanned_at: string | null;
+}
+
+interface SourceLineageRow {
+  id: string;
+  current_revision_id: string | null;
+}
+
+interface SourcePurgeSnapshot {
+  preview: SourcePurgePreview;
+}
+
+interface PurgeCounts {
+  sourceCount: number;
+  documentCount: number;
+  revisionCount: number;
+  chunkCount: number;
+  ftsEntryCount: number;
+  retrievalEventCount: number;
+}
+
+interface DeletionReceiptRow {
+  id: string;
+  target_kind: "source";
+  target_id: string;
+  completed_at: string;
+  source_count: number | bigint;
+  document_count: number | bigint;
+  revision_count: number | bigint;
+  chunk_count: number | bigint;
+  fts_entry_count: number | bigint;
+  retrieval_event_count: number | bigint;
+  assurance: "logical-non-addressability";
+  original_files_modified: number | bigint;
+  secure_erase_claimed: number | bigint;
 }
 
 interface DiscoveredFiles {
@@ -322,6 +370,155 @@ export function listSources(vault: Vault): VaultSource[] {
   }));
 }
 
+export function prepareSourcePurge(
+  vault: Vault,
+  sourceId: string,
+): PrepareSourcePurgeResult {
+  const state = stateFor(vault);
+  assertHashId(sourceId, "sourceId");
+  if (state.importingSources.size > 0) {
+    return { status: "import-in-progress" };
+  }
+
+  const snapshot = sourcePurgeSnapshot(state.db, sourceId);
+  return snapshot
+    ? { status: "ready", preview: snapshot.preview }
+    : { status: "not-found" };
+}
+
+export function purgeSource(
+  vault: Vault,
+  input: PurgeSourceInput,
+): PurgeSourceResult {
+  const state = stateFor(vault);
+  validatePurgeSourceInput(input);
+  if (state.importingSources.size > 0) {
+    return { status: "import-in-progress" };
+  }
+
+  return transactionImmediate(state.db, () => {
+    // JavaScript execution is synchronous inside this transaction, but retain
+    // the guard here so future callers cannot accidentally nest purge inside an
+    // asynchronous import transaction.
+    if (state.importingSources.size > 0) {
+      return { status: "import-in-progress" };
+    }
+
+    const snapshot = sourcePurgeSnapshot(state.db, input.sourceId);
+    if (!snapshot) return { status: "not-found" };
+    if (
+      snapshot.preview.documentCount !== input.expectedDocumentCount ||
+      snapshot.preview.lastScannedAt !== input.expectedLastScannedAt ||
+      snapshot.preview.confirmationToken !== input.confirmationToken
+    ) {
+      return { status: "stale-confirmation" };
+    }
+
+    const targetCounts = sourcePurgeCounts(state.db, input.sourceId);
+    const before = databaseTotals(state.db);
+    if (targetCounts.sourceCount !== 1) {
+      throw new Error("Source purge precondition failed");
+    }
+
+    // Retrieval audit rows linked to the source are removed instead of being
+    // retained with query hashes after their document/chunk references become
+    // NULL. The content-free deletion receipt retains only the number removed.
+    state.db.prepare(`
+      DELETE FROM retrieval_events
+      WHERE document_id IN (
+        SELECT id FROM documents WHERE source_id = ?
+      ) OR chunk_id IN (
+        SELECT c.id
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE d.source_id = ?
+      )
+    `).run(input.sourceId, input.sourceId);
+
+    // Delete all index rows tied to the source explicitly. The chunk trigger
+    // then becomes an idempotent defense-in-depth cleanup during the cascade.
+    state.db.prepare(`
+      DELETE FROM chunks_fts
+      WHERE document_id IN (
+        SELECT id FROM documents WHERE source_id = ?
+      )
+    `).run(input.sourceId);
+
+    const deletedSource = state.db.prepare("DELETE FROM sources WHERE id = ?")
+      .run(input.sourceId);
+    if (Number(deletedSource.changes) !== 1) {
+      throw new Error("Source purge did not delete exactly one source");
+    }
+
+    const after = databaseTotals(state.db);
+    assertPurgeDeltas(before, after, targetCounts);
+    if (state.db.prepare("SELECT 1 FROM sources WHERE id = ?").get(input.sourceId)) {
+      throw new Error("Source remains addressable after purge");
+    }
+    if (state.db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+      throw new Error("Source purge left a foreign-key integrity error");
+    }
+
+    const receipt: DeletionReceipt = {
+      receiptId: randomBytes(32).toString("hex"),
+      targetKind: "source",
+      targetId: input.sourceId,
+      completedAt: new Date().toISOString(),
+      ...targetCounts,
+      assurance: "logical-non-addressability",
+      originalFilesModified: false,
+      secureEraseClaimed: false,
+    };
+    insertDeletionReceipt(state.db, receipt);
+    return { status: "purged", receipt };
+  });
+}
+
+export function listDeletionReceipts(
+  vault: Vault,
+  limit = 20,
+): DeletionReceipt[] {
+  const boundedLimit = boundedInteger(limit, "limit", 1, 100);
+  const rows = databaseFor(vault).prepare(`
+    SELECT
+      id, target_kind, target_id, completed_at, source_count,
+      document_count, revision_count, chunk_count, fts_entry_count,
+      retrieval_event_count, assurance, original_files_modified,
+      secure_erase_claimed
+    FROM deletion_receipts
+    ORDER BY completed_at DESC, id DESC
+    LIMIT ?
+  `).all(boundedLimit) as unknown as DeletionReceiptRow[];
+  return rows.map(deletionReceiptFromRow);
+}
+
+export function verifyDeletionReceipt(
+  vault: Vault,
+  receiptId: string,
+): DeletionReceiptVerification {
+  assertHashId(receiptId, "receiptId");
+  const db = databaseFor(vault);
+  const row = db.prepare(`
+    SELECT
+      id, target_kind, target_id, completed_at, source_count,
+      document_count, revision_count, chunk_count, fts_entry_count,
+      retrieval_event_count, assurance, original_files_modified,
+      secure_erase_claimed
+    FROM deletion_receipts
+    WHERE id = ?
+  `).get(receiptId) as unknown as DeletionReceiptRow | undefined;
+  if (!row) return { status: "not-found" };
+
+  const receipt = deletionReceiptFromRow(row);
+  if (hasVaultProjectionIntegrityError(db)) {
+    return { status: "integrity-error", receipt };
+  }
+  if (db.prepare("SELECT 1 FROM sources WHERE id = ?").get(receipt.targetId)) {
+    return { status: "target-reintroduced", receipt };
+  }
+  return { status: "verified", receipt };
+}
+
 export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchResult[] {
   const db = databaseFor(vault);
   if (!input || typeof input.query !== "string") {
@@ -489,6 +686,227 @@ export function purgeDocument(vault: Vault, documentId: string): boolean {
     deleted = Number(result.changes) > 0;
   });
   return deleted;
+}
+
+function sourcePurgeSnapshot(
+  db: DatabaseSync,
+  sourceId: string,
+): SourcePurgeSnapshot | null {
+  const source = db.prepare(`
+    SELECT id, display_name, root_uri, last_scanned_at
+    FROM sources
+    WHERE id = ?
+  `).get(sourceId) as unknown as SourcePurgeRow | undefined;
+  if (!source) return null;
+
+  const lineage = db.prepare(`
+    SELECT id, current_revision_id
+    FROM documents
+    WHERE source_id = ?
+    ORDER BY id
+  `).all(sourceId) as unknown as SourceLineageRow[];
+  const lineageDigestInput = lineage
+    .map((document) => `${document.id}:${document.current_revision_id ?? "none"}`)
+    .join("\n");
+  const confirmationToken = deterministicId(
+    "source-purge-confirmation",
+    source.id,
+    source.last_scanned_at ?? "none",
+    String(lineage.length),
+    lineageDigestInput,
+  );
+
+  return {
+    preview: {
+      sourceId: source.id,
+      name: source.display_name,
+      rootUri: source.root_uri,
+      documentCount: lineage.length,
+      lastScannedAt: source.last_scanned_at,
+      confirmationToken,
+    },
+  };
+}
+
+function validatePurgeSourceInput(input: PurgeSourceInput): void {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("purge source input is required");
+  }
+  assertHashId(input.sourceId, "sourceId");
+  assertHashId(input.confirmationToken, "confirmationToken");
+  boundedInteger(input.expectedDocumentCount, "expectedDocumentCount", 0, 1_000_000);
+  if (
+    input.expectedLastScannedAt !== null &&
+    (
+      typeof input.expectedLastScannedAt !== "string" ||
+      input.expectedLastScannedAt.length === 0 ||
+      input.expectedLastScannedAt.length > 64
+    )
+  ) {
+    throw new TypeError("expectedLastScannedAt must be a bounded timestamp or null");
+  }
+}
+
+function sourcePurgeCounts(db: DatabaseSync, sourceId: string): PurgeCounts {
+  return {
+    sourceCount: countRows(db, "SELECT count(*) AS count FROM sources WHERE id = ?", sourceId),
+    documentCount: countRows(
+      db,
+      "SELECT count(*) AS count FROM documents WHERE source_id = ?",
+      sourceId,
+    ),
+    revisionCount: countRows(db, `
+      SELECT count(*) AS count
+      FROM revisions r
+      JOIN documents d ON d.id = r.document_id
+      WHERE d.source_id = ?
+    `, sourceId),
+    chunkCount: countRows(db, `
+      SELECT count(*) AS count
+      FROM chunks c
+      JOIN documents d ON d.id = c.document_id
+      WHERE d.source_id = ?
+    `, sourceId),
+    ftsEntryCount: countRows(db, `
+      SELECT count(*) AS count
+      FROM chunks_fts f
+      JOIN documents d ON d.id = f.document_id
+      WHERE d.source_id = ?
+    `, sourceId),
+    retrievalEventCount: countRows(db, `
+      SELECT count(*) AS count
+      FROM retrieval_events
+      WHERE document_id IN (
+        SELECT id FROM documents WHERE source_id = ?
+      ) OR chunk_id IN (
+        SELECT c.id
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE d.source_id = ?
+      )
+    `, sourceId, sourceId),
+  };
+}
+
+function databaseTotals(db: DatabaseSync): PurgeCounts {
+  return {
+    sourceCount: countRows(db, "SELECT count(*) AS count FROM sources"),
+    documentCount: countRows(db, "SELECT count(*) AS count FROM documents"),
+    revisionCount: countRows(db, "SELECT count(*) AS count FROM revisions"),
+    chunkCount: countRows(db, "SELECT count(*) AS count FROM chunks"),
+    ftsEntryCount: countRows(db, "SELECT count(*) AS count FROM chunks_fts"),
+    retrievalEventCount: countRows(db, "SELECT count(*) AS count FROM retrieval_events"),
+  };
+}
+
+function countRows(
+  db: DatabaseSync,
+  sql: string,
+  ...parameters: SQLInputValue[]
+): number {
+  const row = db.prepare(sql).get(...parameters) as
+    | { count: number | bigint }
+    | undefined;
+  return Number(row?.count ?? 0);
+}
+
+function assertPurgeDeltas(
+  before: PurgeCounts,
+  after: PurgeCounts,
+  removed: PurgeCounts,
+): void {
+  const fields = [
+    "sourceCount",
+    "documentCount",
+    "revisionCount",
+    "chunkCount",
+    "ftsEntryCount",
+    "retrievalEventCount",
+  ] as const;
+  for (const field of fields) {
+    if (after[field] !== before[field] - removed[field]) {
+      throw new Error(`Source purge postcondition failed for ${field}`);
+    }
+  }
+}
+
+function insertDeletionReceipt(db: DatabaseSync, receipt: DeletionReceipt): void {
+  db.prepare(`
+    INSERT INTO deletion_receipts(
+      id, target_kind, target_id, completed_at, source_count,
+      document_count, revision_count, chunk_count, fts_entry_count,
+      retrieval_event_count, assurance, original_files_modified,
+      secure_erase_claimed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+  `).run(
+    receipt.receiptId,
+    receipt.targetKind,
+    receipt.targetId,
+    receipt.completedAt,
+    receipt.sourceCount,
+    receipt.documentCount,
+    receipt.revisionCount,
+    receipt.chunkCount,
+    receipt.ftsEntryCount,
+    receipt.retrievalEventCount,
+    receipt.assurance,
+  );
+}
+
+function deletionReceiptFromRow(row: DeletionReceiptRow): DeletionReceipt {
+  if (
+    row.target_kind !== "source" ||
+    row.assurance !== "logical-non-addressability" ||
+    Number(row.original_files_modified) !== 0 ||
+    Number(row.secure_erase_claimed) !== 0
+  ) {
+    throw new Error("Stored deletion receipt violates its content-free contract");
+  }
+  return {
+    receiptId: row.id,
+    targetKind: row.target_kind,
+    targetId: row.target_id,
+    completedAt: row.completed_at,
+    sourceCount: Number(row.source_count),
+    documentCount: Number(row.document_count),
+    revisionCount: Number(row.revision_count),
+    chunkCount: Number(row.chunk_count),
+    ftsEntryCount: Number(row.fts_entry_count),
+    retrievalEventCount: Number(row.retrieval_event_count),
+    assurance: row.assurance,
+    originalFilesModified: false,
+    secureEraseClaimed: false,
+  };
+}
+
+function hasVaultProjectionIntegrityError(db: DatabaseSync): boolean {
+  if (db.prepare("PRAGMA foreign_key_check").all().length > 0) return true;
+
+  // FTS5 virtual tables cannot carry foreign keys. Check both directions so a
+  // receipt is not presented as current when the content-bearing search
+  // projection has an orphan, mismatch, duplicate, or missing chunk row.
+  const orphanOrMismatch = db.prepare(`
+    SELECT 1
+    FROM chunks_fts f
+    LEFT JOIN chunks c ON c.id = f.chunk_id
+    WHERE c.id IS NULL
+       OR f.document_id IS NOT c.document_id
+       OR f.revision_id IS NOT c.revision_id
+       OR f.title IS NOT c.title
+       OR f.heading_path IS NOT c.heading_path
+       OR f.content IS NOT c.content
+    LIMIT 1
+  `).get();
+  if (orphanOrMismatch) return true;
+
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM chunks c
+    LEFT JOIN chunks_fts f ON f.chunk_id = c.id
+    GROUP BY c.id
+    HAVING count(f.rowid) <> 1
+    LIMIT 1
+  `).get());
 }
 
 function stateFor(vault: Vault): VaultState {
@@ -826,6 +1244,18 @@ function transaction<T>(db: DatabaseSync, operation: () => T): T {
 }
 
 let nextSavepointId = 1;
+
+function transactionImmediate<T>(db: DatabaseSync, operation: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 async function transactionAsync<T>(
   db: DatabaseSync,

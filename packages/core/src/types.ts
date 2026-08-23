@@ -121,3 +121,61 @@ export interface VaultSource {
   status: "ready" | "incomplete";
   documentCount: number;
 }
+
+/**
+ * A point-in-time source snapshot shown before a destructive local-vault action.
+ * The token covers the current source lineage and is intentionally opaque to UI
+ * callers. Purge must fail if any of these values are stale.
+ */
+export interface SourcePurgePreview {
+  sourceId: string;
+  name: string;
+  rootUri: string;
+  documentCount: number;
+  lastScannedAt: string | null;
+  confirmationToken: string;
+}
+
+export type PrepareSourcePurgeResult =
+  | { status: "ready"; preview: SourcePurgePreview }
+  | { status: "not-found" }
+  | { status: "import-in-progress" };
+
+export interface PurgeSourceInput {
+  sourceId: string;
+  confirmationToken: string;
+  expectedDocumentCount: number;
+  expectedLastScannedAt: string | null;
+}
+
+/**
+ * Content-free evidence of a completed OwnContext lineage purge. It proves
+ * logical non-addressability inside the vault, not secure media erasure.
+ */
+export interface DeletionReceipt {
+  receiptId: string;
+  targetKind: "source";
+  targetId: string;
+  completedAt: string;
+  sourceCount: number;
+  documentCount: number;
+  revisionCount: number;
+  chunkCount: number;
+  ftsEntryCount: number;
+  retrievalEventCount: number;
+  assurance: "logical-non-addressability";
+  originalFilesModified: false;
+  secureEraseClaimed: false;
+}
+
+export type PurgeSourceResult =
+  | { status: "purged"; receipt: DeletionReceipt }
+  | { status: "not-found" }
+  | { status: "import-in-progress" }
+  | { status: "stale-confirmation" };
+
+export type DeletionReceiptVerification =
+  | { status: "verified"; receipt: DeletionReceipt }
+  | { status: "target-reintroduced"; receipt: DeletionReceipt }
+  | { status: "integrity-error"; receipt: DeletionReceipt }
+  | { status: "not-found" };

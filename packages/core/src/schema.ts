@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec(`
@@ -13,7 +13,7 @@ export function initializeSchema(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA user_version").get() as
     | { user_version: number }
     | undefined;
-  const version = Number(row?.user_version ?? 0);
+  let version = Number(row?.user_version ?? 0);
   if (version > SCHEMA_VERSION) {
     throw new Error(
       `Vault schema version ${version} is newer than supported version ${SCHEMA_VERSION}`,
@@ -22,6 +22,16 @@ export function initializeSchema(db: DatabaseSync): void {
 
   if (version === 0) {
     createVersionOne(db);
+    version = 1;
+  }
+
+  if (version === 1) {
+    migrateVersionOneToTwo(db);
+    version = 2;
+  }
+
+  if (version === 2) {
+    ensureFtsSecureDelete(db);
   }
 }
 
@@ -126,6 +136,54 @@ function createVersionOne(db: DatabaseSync): void {
     CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
 
     PRAGMA user_version = 1;
+    COMMIT;
+  `);
+}
+
+function migrateVersionOneToTwo(db: DatabaseSync): void {
+  db.exec(`
+    BEGIN IMMEDIATE;
+
+    CREATE TABLE deletion_receipts (
+      id TEXT PRIMARY KEY CHECK(length(id) = 64),
+      target_kind TEXT NOT NULL CHECK(target_kind = 'source'),
+      target_id TEXT NOT NULL CHECK(length(target_id) = 64),
+      completed_at TEXT NOT NULL,
+      source_count INTEGER NOT NULL CHECK(source_count = 1),
+      document_count INTEGER NOT NULL CHECK(document_count >= 0),
+      revision_count INTEGER NOT NULL CHECK(revision_count >= 0),
+      chunk_count INTEGER NOT NULL CHECK(chunk_count >= 0),
+      fts_entry_count INTEGER NOT NULL CHECK(fts_entry_count >= 0),
+      retrieval_event_count INTEGER NOT NULL CHECK(retrieval_event_count >= 0),
+      assurance TEXT NOT NULL CHECK(assurance = 'logical-non-addressability'),
+      original_files_modified INTEGER NOT NULL CHECK(original_files_modified = 0),
+      secure_erase_claimed INTEGER NOT NULL CHECK(secure_erase_claimed = 0)
+    ) STRICT;
+
+    CREATE INDEX deletion_receipts_completed_idx
+      ON deletion_receipts(completed_at DESC, id DESC);
+    CREATE INDEX deletion_receipts_target_idx
+      ON deletion_receipts(target_kind, target_id, completed_at DESC);
+
+    INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1);
+    -- Rebuild once so a version-one vault does not retain index entries from a
+    -- document that was logically deleted before FTS secure-delete existed.
+    INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
+    PRAGMA user_version = 2;
+    COMMIT;
+  `);
+}
+
+function ensureFtsSecureDelete(db: DatabaseSync): void {
+  const row = db.prepare(`
+    SELECT v FROM chunks_fts_config WHERE k = 'secure-delete'
+  `).get() as { v: number | bigint } | undefined;
+  if (Number(row?.v ?? 0) === 1) return;
+
+  db.exec(`
+    BEGIN IMMEDIATE;
+    INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1);
+    INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
     COMMIT;
   `);
 }

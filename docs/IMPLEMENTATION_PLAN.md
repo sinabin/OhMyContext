@@ -78,6 +78,8 @@ Deliverables:
 - Folder picker, import progress, source health, local search, and result provenance.
 - AI Connections screen that previews configuration changes and keeps backups.
 - Privacy copy that distinguishes offline mode from cloud-AI excerpt transfer.
+- Two-step source removal with stale-confirmation protection and a persistent,
+  content-free logical deletion receipt.
 
 Acceptance:
 
@@ -86,7 +88,10 @@ Acceptance:
 
 ## Milestone 4 — Portable context assets
 
-Status: planned
+Status: in progress — source-level atomic lineage purge, FTS5 secure-delete,
+content-free receipts, and the desktop confirmation flow are implemented and
+prototype-tested. Portable export/import and deletion coverage for other asset
+classes remain planned.
 
 Deliverables:
 

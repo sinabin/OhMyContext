@@ -76,5 +76,6 @@ Project licensing is intentionally pending the maintainer's Apache-2.0 versus AG
 - [Platform scope and measurement plan](docs/HARDWARE_REQUIREMENTS.md)
 - [Connector acquisition policy](docs/CONNECTOR_POLICY.md)
 - [Security and privacy model](docs/SECURITY_MODEL.md)
+- [Windows-first encryption architecture](docs/ENCRYPTION_ARCHITECTURE.md)
 - [Apache-2.0 versus AGPL-3.0 explainer](docs/LICENSE_OPTIONS.ko.md)
 - [Release compliance evidence](docs/RELEASE_COMPLIANCE.md)

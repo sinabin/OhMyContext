@@ -9,10 +9,14 @@ import {
   deterministicId,
   fetchDocument,
   importDirectory,
+  listDeletionReceipts,
   listSources,
   openVault,
+  prepareSourcePurge,
   purgeDocument,
+  purgeSource,
   searchVault,
+  verifyDeletionReceipt,
   type Vault,
   type ImportProgress,
 } from "../src/index.js";
@@ -90,6 +94,7 @@ describe("vault ingestion and retrieval", () => {
     `).all().map((row) => String(row.name));
     expect(tables).toEqual(expect.arrayContaining([
       "sources", "documents", "revisions", "chunks", "chunks_fts", "retrieval_events",
+      "deletion_receipts",
     ]));
     db.close();
   });
@@ -244,6 +249,352 @@ describe("vault ingestion and retrieval", () => {
       expect(Number(row.count)).toBe(0);
     }
     db.close();
+  });
+
+  it("atomically purges a complete source lineage and persists a content-free receipt", async () => {
+    const { root, dbPath, vault } = await fixture();
+    const firstFile = join(root, "one.md");
+    await writeFile(firstFile, "# One\nsourcepurgecanary first revision", "utf8");
+    await writeFile(join(root, "two.txt"), "sourcepurgecanary second document", "utf8");
+    const first = await importDirectory(vault, root, { collection: "remove" });
+
+    await writeFile(firstFile, "# One\nsourcepurgecanary updated revision", "utf8");
+    const future = new Date(Date.now() + 2_000);
+    await utimes(firstFile, future, future);
+    await importDirectory(vault, root, { collection: "remove" });
+    await importDirectory(vault, root, { collection: "keep" });
+
+    const targetHits = searchVault(vault, {
+      query: "sourcepurgecanary",
+      collection: "remove",
+      limit: 10,
+    });
+    expect(targetHits.length).toBeGreaterThan(0);
+    const targetHit = targetHits[0];
+    if (!targetHit) throw new Error("Expected a target search result");
+    expect(fetchDocument(vault, {
+      documentId: targetHit.documentId,
+      chunkId: targetHit.chunkId,
+    })).not.toBeNull();
+
+    const audit = new DatabaseSync(dbPath, { readOnly: true });
+    const linkedAuditBefore = audit.prepare(`
+      SELECT count(*) AS count
+      FROM retrieval_events
+      WHERE document_id IN (
+        SELECT id FROM documents WHERE source_id = ?
+      )
+    `).get(first.sourceId) as { count: number };
+    audit.close();
+
+    const prepared = prepareSourcePurge(vault, first.sourceId);
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    expect(prepared.preview).toMatchObject({
+      sourceId: first.sourceId,
+      documentCount: 2,
+    });
+
+    const result = purgeSource(vault, {
+      sourceId: prepared.preview.sourceId,
+      confirmationToken: prepared.preview.confirmationToken,
+      expectedDocumentCount: prepared.preview.documentCount,
+      expectedLastScannedAt: prepared.preview.lastScannedAt,
+    });
+    expect(result.status).toBe("purged");
+    if (result.status !== "purged") throw new Error("Expected a deletion receipt");
+    expect(result.receipt).toMatchObject({
+      targetKind: "source",
+      targetId: first.sourceId,
+      sourceCount: 1,
+      documentCount: 2,
+      revisionCount: 3,
+      assurance: "logical-non-addressability",
+      originalFilesModified: false,
+      secureEraseClaimed: false,
+      retrievalEventCount: Number(linkedAuditBefore.count),
+    });
+    expect(result.receipt.receiptId).toMatch(HASH_ID_PATTERN);
+    expect(result.receipt.chunkCount).toBeGreaterThanOrEqual(2);
+    expect(result.receipt.ftsEntryCount).toBe(result.receipt.chunkCount);
+
+    expect(listSources(vault).map((source) => source.collection)).toEqual(["keep"]);
+    expect(fetchDocument(vault, { documentId: targetHit.documentId })).toBeNull();
+    expect(searchVault(vault, {
+      query: "sourcepurgecanary",
+      collection: "remove",
+    })).toEqual([]);
+    expect(searchVault(vault, {
+      query: "sourcepurgecanary",
+      collection: "keep",
+    }).length).toBeGreaterThan(0);
+
+    expect(listDeletionReceipts(vault)).toEqual([result.receipt]);
+    expect(verifyDeletionReceipt(vault, result.receipt.receiptId)).toEqual({
+      status: "verified",
+      receipt: result.receipt,
+    });
+
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const remaining = inspection.prepare(`
+      SELECT
+        (SELECT count(*) FROM sources WHERE id = ?) AS sources,
+        (SELECT count(*) FROM documents WHERE source_id = ?) AS documents,
+        (SELECT count(*) FROM retrieval_events WHERE document_id IN (
+          SELECT id FROM documents WHERE source_id = ?
+        )) AS linked_events
+    `).get(first.sourceId, first.sourceId, first.sourceId) as Record<string, number>;
+    const storedReceipt = inspection.prepare(`
+      SELECT * FROM deletion_receipts WHERE id = ?
+    `).get(result.receipt.receiptId) as Record<string, unknown>;
+    inspection.close();
+    expect(Object.values(remaining).map(Number)).toEqual([0, 0, 0]);
+    const serializedReceipt = JSON.stringify(storedReceipt);
+    expect(serializedReceipt).not.toContain("sourcepurgecanary");
+    expect(serializedReceipt).not.toContain(root);
+    expect(serializedReceipt).not.toContain("One");
+    expect(await readFile(firstFile, "utf8")).toContain("sourcepurgecanary");
+  });
+
+  it("creates no receipt when a source is missing", async () => {
+    const { vault } = await fixture();
+    const missingId = "a".repeat(64);
+    expect(prepareSourcePurge(vault, missingId)).toEqual({ status: "not-found" });
+    expect(purgeSource(vault, {
+      sourceId: missingId,
+      confirmationToken: "b".repeat(64),
+      expectedDocumentCount: 0,
+      expectedLastScannedAt: null,
+    })).toEqual({ status: "not-found" });
+    expect(listDeletionReceipts(vault)).toEqual([]);
+  });
+
+  it("fails closed when the confirmed source count or scan time is stale", async () => {
+    const { root, dbPath, vault } = await fixture();
+    await writeFile(join(root, "one.md"), "stale confirmation source", "utf8");
+    const imported = await importDirectory(vault, root);
+    const first = prepareSourcePurge(vault, imported.sourceId);
+    if (first.status !== "ready") throw new Error("Expected purge preview");
+
+    await writeFile(join(root, "two.md"), "a newly discovered document", "utf8");
+    await importDirectory(vault, root);
+    expect(purgeSource(vault, {
+      sourceId: first.preview.sourceId,
+      confirmationToken: first.preview.confirmationToken,
+      expectedDocumentCount: first.preview.documentCount,
+      expectedLastScannedAt: first.preview.lastScannedAt,
+    })).toEqual({ status: "stale-confirmation" });
+    expect(listSources(vault)[0]?.documentCount).toBe(2);
+    expect(listDeletionReceipts(vault)).toEqual([]);
+
+    const second = prepareSourcePurge(vault, imported.sourceId);
+    if (second.status !== "ready") throw new Error("Expected refreshed purge preview");
+    const changedScanTime = "2099-01-01T00:00:00.000Z";
+    const setup = new DatabaseSync(dbPath);
+    setup.prepare("UPDATE sources SET last_scanned_at = ? WHERE id = ?")
+      .run(changedScanTime, imported.sourceId);
+    setup.close();
+    expect(purgeSource(vault, {
+      sourceId: second.preview.sourceId,
+      confirmationToken: second.preview.confirmationToken,
+      expectedDocumentCount: second.preview.documentCount,
+      expectedLastScannedAt: second.preview.lastScannedAt,
+    })).toEqual({ status: "stale-confirmation" });
+    expect(listDeletionReceipts(vault)).toEqual([]);
+  });
+
+  it("rejects source purge while an import is active", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "one.md"), "import interleave guard", "utf8");
+    const imported = await importDirectory(vault, root);
+    const prepared = prepareSourcePurge(vault, imported.sourceId);
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    await writeFile(join(root, "two.md"), "refresh in progress", "utf8");
+
+    const observed: string[] = [];
+    await importDirectory(vault, root, {
+      onProgress: (progress) => {
+        if (progress.phase !== "discovering" || observed.length > 0) return;
+        observed.push(prepareSourcePurge(vault, imported.sourceId).status);
+        observed.push(purgeSource(vault, {
+          sourceId: prepared.preview.sourceId,
+          confirmationToken: prepared.preview.confirmationToken,
+          expectedDocumentCount: prepared.preview.documentCount,
+          expectedLastScannedAt: prepared.preview.lastScannedAt,
+        }).status);
+      },
+    });
+
+    expect(observed).toEqual(["import-in-progress", "import-in-progress"]);
+    expect(listSources(vault)[0]?.documentCount).toBe(2);
+    expect(listDeletionReceipts(vault)).toEqual([]);
+  });
+
+  it("rolls back source deletion when its receipt cannot be stored", async () => {
+    const { root, dbPath, vault } = await fixture();
+    await writeFile(join(root, "keep.md"), "receipt rollback canary", "utf8");
+    const imported = await importDirectory(vault, root);
+    const prepared = prepareSourcePurge(vault, imported.sourceId);
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      CREATE TRIGGER test_reject_deletion_receipt
+      BEFORE INSERT ON deletion_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated receipt failure');
+      END;
+    `);
+    setup.close();
+
+    expect(() => purgeSource(vault, {
+      sourceId: prepared.preview.sourceId,
+      confirmationToken: prepared.preview.confirmationToken,
+      expectedDocumentCount: prepared.preview.documentCount,
+      expectedLastScannedAt: prepared.preview.lastScannedAt,
+    })).toThrow("simulated receipt failure");
+    expect(listSources(vault)[0]?.documentCount).toBe(1);
+    expect(searchVault(vault, { query: "receipt rollback canary" })).toHaveLength(1);
+    expect(listDeletionReceipts(vault)).toEqual([]);
+  });
+
+  it("persists FTS5 secure-delete through a version-one schema upgrade", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    const downgrade = new DatabaseSync(dbPath);
+    downgrade.exec(`
+      DROP TABLE deletion_receipts;
+      INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 0);
+      PRAGMA user_version = 1;
+    `);
+    downgrade.close();
+
+    const migrated = openVault(dbPath);
+    openVaults.push(migrated);
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const version = inspection.prepare("PRAGMA user_version").get() as { user_version: number };
+    const ftsConfig = inspection.prepare(`
+      SELECT v FROM chunks_fts_config WHERE k = 'secure-delete'
+    `).get() as { v: number };
+    const receiptTable = inspection.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deletion_receipts'
+    `).get();
+    inspection.close();
+    expect(Number(version.user_version)).toBe(2);
+    expect(Number(ftsConfig.v)).toBe(1);
+    expect(receiptTable).toBeDefined();
+  });
+
+  it("rebuilds a version-one FTS index to scrub previously deleted terms", async () => {
+    const { root, dbPath, vault } = await fixture();
+    const canary = "legacydeletedftsindexcanaryxqz123456789";
+    await writeFile(join(root, "legacy.md"), canary.repeat(20), "utf8");
+    const imported = await importDirectory(vault, root);
+    const legacyMode = new DatabaseSync(dbPath);
+    legacyMode.exec(`
+      INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 0);
+    `);
+    legacyMode.close();
+    expect(purgeDocument(vault, imported.documents[0]?.documentId ?? "")).toBe(true);
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(true);
+
+    const downgrade = new DatabaseSync(dbPath);
+    downgrade.exec(`
+      DROP TABLE deletion_receipts;
+      PRAGMA user_version = 1;
+    `);
+    downgrade.close();
+    const migrated = openVault(dbPath);
+    migrated.close();
+    expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(false);
+  });
+
+  it("removes a persisted canary from the closed database with FTS secure-delete", async () => {
+    const { root, dbPath, vault } = await fixture();
+    const canary = "ftssecuredeletecanaryxqz987654321";
+    await writeFile(join(root, "canary.md"), canary.repeat(20), "utf8");
+    const imported = await importDirectory(vault, root);
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(true);
+
+    const reopened = openVault(dbPath);
+    openVaults.push(reopened);
+    const prepared = prepareSourcePurge(reopened, imported.sourceId);
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    const purged = purgeSource(reopened, {
+      sourceId: prepared.preview.sourceId,
+      confirmationToken: prepared.preview.confirmationToken,
+      expectedDocumentCount: prepared.preview.documentCount,
+      expectedLastScannedAt: prepared.preview.lastScannedAt,
+    });
+    expect(purged.status).toBe("purged");
+    reopened.close();
+    openVaults.splice(openVaults.indexOf(reopened), 1);
+    expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(false);
+  });
+
+  it("keeps the receipt and reports reintroduction after an explicit reimport", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "return.md"), "explicit reimport can restore this", "utf8");
+    const imported = await importDirectory(vault, root);
+    const prepared = prepareSourcePurge(vault, imported.sourceId);
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    const purged = purgeSource(vault, {
+      sourceId: prepared.preview.sourceId,
+      confirmationToken: prepared.preview.confirmationToken,
+      expectedDocumentCount: prepared.preview.documentCount,
+      expectedLastScannedAt: prepared.preview.lastScannedAt,
+    });
+    if (purged.status !== "purged") throw new Error("Expected purge receipt");
+    expect(verifyDeletionReceipt(vault, purged.receipt.receiptId).status).toBe("verified");
+
+    const restored = await importDirectory(vault, root);
+    expect(restored.sourceId).toBe(imported.sourceId);
+    expect(restored.imported).toBe(1);
+    expect(searchVault(vault, { query: "explicit reimport" })).toHaveLength(1);
+    expect(verifyDeletionReceipt(vault, purged.receipt.receiptId)).toEqual({
+      status: "target-reintroduced",
+      receipt: purged.receipt,
+    });
+    expect(listDeletionReceipts(vault)).toEqual([purged.receipt]);
+  });
+
+  it("reports receipt verification as an integrity error for an orphan FTS row", async () => {
+    const { root, dbPath, vault } = await fixture();
+    await writeFile(join(root, "remove.md"), "fts receipt integrity", "utf8");
+    const imported = await importDirectory(vault, root);
+    const prepared = prepareSourcePurge(vault, imported.sourceId);
+    if (prepared.status !== "ready") throw new Error("Expected purge preview");
+    const purged = purgeSource(vault, {
+      sourceId: prepared.preview.sourceId,
+      confirmationToken: prepared.preview.confirmationToken,
+      expectedDocumentCount: prepared.preview.documentCount,
+      expectedLastScannedAt: prepared.preview.lastScannedAt,
+    });
+    if (purged.status !== "purged") throw new Error("Expected purge receipt");
+
+    const corruption = new DatabaseSync(dbPath);
+    corruption.prepare(`
+      INSERT INTO chunks_fts(
+        chunk_id, document_id, revision_id, title, heading_path, content
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      "1".repeat(64),
+      "2".repeat(64),
+      "3".repeat(64),
+      "orphan",
+      "",
+      "orphan fts content",
+    );
+    corruption.close();
+
+    expect(verifyDeletionReceipt(vault, purged.receipt.receiptId)).toEqual({
+      status: "integrity-error",
+      receipt: purged.receipt,
+    });
   });
 
   it("does not follow a directory link outside the selected root", async () => {

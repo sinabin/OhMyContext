@@ -1,13 +1,24 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type IpcMainInvokeEvent,
+} from "electron";
 import {
   fetchDocument,
   importDirectory,
+  listDeletionReceipts,
   listSources,
   openVault,
+  prepareSourcePurge,
+  purgeSource,
   searchVault,
+  verifyDeletionReceipt,
+  type PurgeSourceInput,
   type Vault,
 } from "@owncontext/core";
 import {
@@ -15,6 +26,7 @@ import {
   type CodexConfigService,
   type OwnContextMcpLaunch,
 } from "./codex-config.js";
+import { isTrustedIpcSender } from "./ipc-trust.js";
 import {
   prepareGuiSmoke,
   writeGuiSmokeSuccess,
@@ -29,6 +41,29 @@ const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 let vault: Vault | undefined;
 let activeImport: AbortController | undefined;
 let quitAfterImport = false;
+let trustedRendererWebContentsId: number | undefined;
+
+function rendererEntryPath(): string {
+  return join(moduleDirectory, "../dist/renderer/index.html");
+}
+
+function trustedWindowFor(event: IpcMainInvokeEvent): BrowserWindow {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const frame = event.senderFrame;
+  if (
+    !window ||
+    !isTrustedIpcSender({
+      trustedWebContentsId: trustedRendererWebContentsId,
+      senderWebContentsId: event.sender.id,
+      isMainFrame: frame === event.sender.mainFrame,
+      senderUrl: frame?.url ?? "",
+      expectedUrl: pathToFileURL(rendererEntryPath()).href,
+    })
+  ) {
+    throw new Error("OwnContext rejected an untrusted IPC sender.");
+  }
+  return window;
+}
 
 function databasePath(): string {
   return join(app.getPath("userData"), "owncontext.sqlite");
@@ -117,8 +152,20 @@ function createWindow(guiSmoke?: GuiSmokeContext): BrowserWindow {
     },
   });
 
+  const expectedUrl = pathToFileURL(rendererEntryPath()).href;
+  const windowWebContentsId = window.webContents.id;
+  trustedRendererWebContentsId = windowWebContentsId;
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, navigationUrl) => {
+    if (navigationUrl !== expectedUrl) event.preventDefault();
+  });
+  window.once("closed", () => {
+    if (trustedRendererWebContentsId === windowWebContentsId) {
+      trustedRendererWebContentsId = undefined;
+    }
+  });
   if (guiSmoke) armGuiSmoke(window, guiSmoke);
-  void window.loadFile(join(moduleDirectory, "../dist/renderer/index.html"));
+  void window.loadFile(rendererEntryPath());
   return window;
 }
 
@@ -127,18 +174,22 @@ function startDesktopApp(
   guiSmoke?: GuiSmokeContext,
 ): void {
   void app.whenReady().then(() => {
-    ipcMain.handle("vault:status", () => ({
-      ready: true,
-      mode: "Local vault + selected AI excerpts",
-      encryption: "not-implemented" as const,
-    }));
+    ipcMain.handle("vault:status", (event) => {
+      trustedWindowFor(event);
+      return {
+        ready: true,
+        mode: "Local vault + selected AI excerpts",
+        encryption: "not-implemented" as const,
+      };
+    });
 
     ipcMain.handle("vault:import-directory", async (event) => {
+      const parentWindow = trustedWindowFor(event);
       if (activeImport) {
         throw new Error("An import is already running.");
       }
 
-      const selection = await dialog.showOpenDialog({
+      const selection = await dialog.showOpenDialog(parentWindow, {
         title: "Choose a folder you are authorized to import",
         properties: ["openDirectory"],
       });
@@ -177,28 +228,79 @@ function startDesktopApp(
       }
     });
 
-    ipcMain.handle("vault:cancel-import", () => {
+    ipcMain.handle("vault:cancel-import", (event) => {
+      trustedWindowFor(event);
       const requested = activeImport !== undefined;
       activeImport?.abort();
       return { requested };
     });
 
-    ipcMain.handle("vault:search", (_event, query: string) => {
+    ipcMain.handle("vault:search", (event, query: string) => {
+      trustedWindowFor(event);
       return { results: searchVault(requireVault(), { query, limit: 12 }) };
     });
 
     ipcMain.handle(
       "vault:fetch",
-      (_event, input: { documentId: string; chunkId: string }) => {
+      (event, input: { documentId: string; chunkId: string }) => {
+        trustedWindowFor(event);
         return fetchDocument(requireVault(), input);
       },
     );
 
-    ipcMain.handle("vault:list-sources", () => ({
-      sources: listSources(requireVault()),
-    }));
+    ipcMain.handle("vault:list-sources", (event) => {
+      trustedWindowFor(event);
+      return { sources: listSources(requireVault()) };
+    });
 
-    ipcMain.handle("connection:codex-preview", async () => {
+    ipcMain.handle("vault:prepare-source-purge", (event, sourceId: string) => {
+      trustedWindowFor(event);
+      return prepareSourcePurge(requireVault(), sourceId);
+    });
+
+    ipcMain.handle("vault:purge-source", async (event, input: PurgeSourceInput) => {
+      const parentWindow = trustedWindowFor(event);
+      const prepared = prepareSourcePurge(requireVault(), input.sourceId);
+      if (prepared.status !== "ready") return prepared;
+      if (
+        prepared.preview.confirmationToken !== input.confirmationToken ||
+        prepared.preview.documentCount !== input.expectedDocumentCount ||
+        prepared.preview.lastScannedAt !== input.expectedLastScannedAt
+      ) {
+        return { status: "stale-confirmation" as const };
+      }
+
+      const confirmation = await dialog.showMessageBox(parentWindow, {
+        type: "warning",
+        title: "Confirm OwnContext removal",
+        message: `Remove “${prepared.preview.name}” from OwnContext?`,
+        detail:
+          `This removes ${prepared.preview.documentCount} indexed document(s) and their stored lineage. ` +
+          "The original folder remains unchanged.",
+        buttons: ["Keep source", "Remove local copy"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (confirmation.response !== 1) {
+        return { status: "canceled" as const };
+      }
+      return purgeSource(requireVault(), input);
+    });
+
+    ipcMain.handle("vault:list-deletion-receipts", (event) => {
+      trustedWindowFor(event);
+      const activeVault = requireVault();
+      return {
+        receipts: listDeletionReceipts(activeVault, 3).map((receipt) => ({
+          ...receipt,
+          verificationStatus: verifyDeletionReceipt(activeVault, receipt.receiptId).status,
+        })),
+      };
+    });
+
+    ipcMain.handle("connection:codex-preview", async (event) => {
+      trustedWindowFor(event);
       const serverReady = existsSync(mcpEntryPath());
       const preview = await codexConfig.preview(codexLaunch());
       return {
@@ -208,7 +310,8 @@ function startDesktopApp(
       };
     });
 
-    ipcMain.handle("connection:codex-apply", async () => {
+    ipcMain.handle("connection:codex-apply", async (event) => {
+      trustedWindowFor(event);
       if (!existsSync(mcpEntryPath())) {
         return {
           ok: false,
@@ -220,7 +323,10 @@ function startDesktopApp(
       return codexConfig.apply(codexLaunch());
     });
 
-    ipcMain.handle("connection:codex-remove", () => codexConfig.remove());
+    ipcMain.handle("connection:codex-remove", (event) => {
+      trustedWindowFor(event);
+      return codexConfig.remove();
+    });
 
     createWindow(guiSmoke);
 
@@ -280,6 +386,23 @@ async function bootstrap(): Promise<void> {
   if (squirrel.handled) {
     await squirrel.completion;
     return;
+  }
+
+  // Squirrel install/update/uninstall hooks must run even while the regular app
+  // is open. Normal interactive launches use one process so a second desktop
+  // instance cannot race an import against a confirmed source purge.
+  if (!guiSmoke) {
+    if (!app.requestSingleInstanceLock()) {
+      app.quit();
+      return;
+    }
+    app.on("second-instance", () => {
+      const existingWindow = BrowserWindow.getAllWindows()[0];
+      if (!existingWindow) return;
+      if (existingWindow.isMinimized()) existingWindow.restore();
+      existingWindow.show();
+      existingWindow.focus();
+    });
   }
 
   const codexConfig = createCodexConfigService(

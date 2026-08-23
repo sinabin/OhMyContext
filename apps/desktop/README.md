@@ -5,7 +5,9 @@ This Electron workspace is the first end-user vertical slice. It can:
 - select a local folder and atomically import UTF-8 Markdown and text files;
 - show bounded, content-free import progress and cancel with a full rollback;
 - list source health and document counts;
-- search the local FTS index and inspect bounded document context; and
+- search the local FTS index and inspect bounded document context;
+- remove a source through a stale-safe preview, native confirmation, atomic
+  lineage purge, and persistent logical deletion receipt; and
 - preview, back up, apply, update, and remove one managed OwnContext block in
   Codex's `~/.codex/config.toml`.
 
@@ -43,18 +45,22 @@ finally runs the packaged smoke test. Outputs are created under a unique
 The unpacked application and the `.nupkg` both contain
 `resources/compliance/THIRD_PARTY_NOTICES.txt`, `SBOM.spdx.json`, and
 `SHA256SUMS`. They are explicitly draft evidence while the project license is
-unresolved, not public-release clearance. The smoke test verifies the unpacked
-evidence, checks that all three files are embedded in the `.nupkg`, starts the
-packaged executable in Electron's Node-compatible mode with the bundled MCP
-CLI, imports a temporary fixture into a SQLite/FTS vault, searches it, fetches
+unresolved, not public-release clearance. The smoke test verifies the complete
+unpacked regular-file payload and requires an exact path, byte-length, and
+SHA-256 match for every corresponding `.nupkg` entry. Only the separately
+inventoried Squirrel/NuGet layer may remain outside that mapping. It then starts
+the packaged executable in Electron's Node-compatible mode with the bundled
+MCP CLI, imports a temporary fixture into a SQLite/FTS vault, searches it, fetches
 the document using the IDs issued by that search, and removes the fixture
 afterward. A separate launch with isolated temporary user data confirms that
 the packaged renderer and preload bridge load in normal GUI mode.
 
-The `.nupkg` check compares the embedded compliance files with the verified
-unpacked files by byte length and SHA-256. The smoke does not yet independently
-extract the setup executable's embedded PE payload; that outer-container check
-remains a public-release evidence gate.
+Archive names are checked without slash or case normalization, and inspection
+has bounded compressed size, entry count, individual/total uncompressed size,
+output buffering, and execution time. The three compliance files also retain
+explicit named checks. The smoke does not yet independently extract the setup
+executable's embedded PE payload; that outer-container check remains a
+public-release evidence gate.
 
 This evidence covers the unpacked application payload, not every maker-added
 byte. Squirrel adds `lib/net45/squirrel.exe`,

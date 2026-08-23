@@ -6,11 +6,14 @@ Last updated: 2026-08-23
 
 OwnContext now has a runnable developer alpha. Automated prototype tests cover
 atomic import and cancellation, selected path and symlink boundaries, revision
-and purge behavior, collection/date filtering, query-text minimization,
+and document/source purge behavior, persistent content-free source deletion
+receipts, collection/date filtering, query-text minimization,
 read-only MCP input and issued-ID boundaries, stdio framing, and reversible
 Codex configuration edits. The Electron window is built with renderer sandboxing,
 context isolation, a CommonJS preload bridge, no Node integration, and a
-restrictive local content security policy.
+restrictive local content security policy. Main-process IPC accepts only the
+expected local main frame, renderer navigation and new windows are blocked, and
+source purge receives an independent native final confirmation.
 
 This is not evidence that the product is safe for sensitive personal data.
 Application-level encryption, complete parser isolation, per-client collection
@@ -116,8 +119,17 @@ These limits do not relax least privilege, encryption-at-rest, log minimization,
 - Use a reviewed, versioned encryption design and maintained cryptographic libraries; do not invent a cipher or claim that an encrypted filesystem alone provides application-level vault encryption.
 - Locking the vault clears plaintext caches and closes MCP access. Key rotation and interrupted migration require tested recovery behavior.
 - Best-effort deletion on SSDs is not secure erasure. Cryptographic key destruction and whole-device encryption are part of the deletion guidance, while lineage purge prevents content from remaining addressable by OwnContext.
+- Source purge enables both SQLite core `secure_delete` and FTS5 `secure-delete`, removes target-linked retrieval-event rows, and verifies table-count and foreign-key postconditions before storing a receipt. The receipt asserts only logical non-addressability; it does not assert removal from WAL history, storage media, independent backups, or an external AI provider.
+- Receipt re-verification is deliberately narrower than replaying the historical
+  deletion: it checks that the target source remains absent and that current
+  foreign-key and FTS chunk projections are internally consistent. It does not
+  re-prove historical row counts or make the receipt cryptographically signed.
 
-The exact encryption library and key hierarchy remain undecided. That decision is a Milestone 6 release blocker, not permission to store a public-release vault in plaintext.
+The Windows-first broker topology and per-vault key hierarchy are specified in
+`ENCRYPTION_ARCHITECTURE.md`. The native encrypted-SQLite provider, secured
+named-pipe helper, and implementation evidence remain undecided Milestone 6
+release blockers; the design is not permission to store a public-release vault
+in plaintext.
 
 ### Retrieval authorization
 
@@ -151,6 +163,14 @@ The exact encryption library and key hierarchy remain undecided. That decision i
 - Production logs use event categories and random operation IDs, not document content. A user-generated diagnostic bundle has a preview and deterministic redaction.
 - `.ownctx` export includes only the collections and asset classes selected by the user. It excludes credentials, keys, AI-client configuration, operational logs, audit payloads, and deleted content.
 - Export manifests and checksums provide integrity, not confidentiality. An unencrypted export carries a blocking warning; encrypted portable export requires a separately reviewed design.
+- A source purge deletes retrieval-event rows linked to that source before cascading its documents. Its retained receipt contains opaque identifiers, timestamps, and aggregate lineage counts, never document content, titles, paths, source URLs, or query hashes.
+- Folder sources are snapshots acquired by an explicit user import. Removing a source does not create a permanent filesystem exclusion: explicitly adding the same folder later can recreate the same source ID. Receipt verification reports that state as `target-reintroduced`, and the desktop refreshes receipt state after every completed import.
+- The current direct MCP process is outside the desktop's single-instance
+  boundary. An already authorized or in-flight response can outlive the storage
+  transaction, so the purge dialog warns that transferred or in-progress AI
+  excerpts are outside its guarantee. Broker session invalidation and response
+  linearization in `ENCRYPTION_ARCHITECTURE.md` are required before a stronger
+  public deletion claim.
 
 ### Supply chain and updates
 
@@ -163,11 +183,11 @@ The exact encryption library and key hierarchy remain undecided. That decision i
 
 | Control area | First implementation target | Public-release requirement | Current status |
 | --- | --- | --- | --- |
-| Path boundaries, deterministic hashes, atomic import/cancel/delete behavior | Milestone 1 | Regression suite passes on packaged app | Prototype verified for current folder importer fixtures |
+| Path boundaries, deterministic hashes, atomic import/cancel/delete behavior | Milestone 1 | Regression suite passes on packaged app | Prototype verified for current folder importer and source-purge fixtures |
 | FTS candidate filtering by collection and date | Milestone 1 | Cross-collection canary suite passes | Prototype verified; per-client grants not implemented |
 | Read-only bounded `search`/`fetch`, search-issued IDs, stdio separation | Milestone 2 | Real-client protocol and authorization tests pass | Prototype verified with SDK client and real child process |
 | Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability and disclosure test passes | Prototype verified for config filesystem cases; usability untested |
-| Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Designed |
+| Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Source-level logical purge and receipt prototype verified; portable export and complete residue coverage remain designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
 | Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Designed |
 | Parser process isolation and resource limits | Milestone 6 | Required for every untrusted format | Designed |

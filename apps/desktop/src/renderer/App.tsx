@@ -3,8 +3,10 @@ import type { FormEvent } from "react";
 import type {
   CodexConnectionMutation,
   CodexConnectionPreview,
+  DeletionReceiptView,
   FetchResponse,
   ImportProgress,
+  SourcePurgePreview,
   VaultSource,
 } from "../electron/preload.cjs";
 
@@ -19,7 +21,7 @@ interface Result {
 }
 
 type View = "library" | "connections";
-type Activity = "import" | "search";
+type Activity = "import" | "search" | "purge";
 
 function summarizeImport(value: unknown): string {
   if (!value || typeof value !== "object") {
@@ -93,6 +95,19 @@ function progressText(progress: ImportProgress | undefined): string {
   return `Importing ${progress.processed} of ${total} · ${progress.imported} new · ${progress.updated} updated`;
 }
 
+function receiptStatus(receipt: DeletionReceiptView): string {
+  switch (receipt.verificationStatus) {
+    case "verified":
+      return "Receipt recorded · source remains absent";
+    case "target-reintroduced":
+      return "Source was added again";
+    case "integrity-error":
+      return "Vault integrity needs attention";
+    case "not-found":
+      return "Receipt could not be re-verified";
+  }
+}
+
 export function App() {
   const [view, setView] = useState<View>("library");
   const [status, setStatus] = useState("Starting local vault…");
@@ -100,9 +115,11 @@ export function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
   const [sources, setSources] = useState<VaultSource[]>([]);
+  const [receipts, setReceipts] = useState<DeletionReceiptView[]>([]);
   const [activity, setActivity] = useState<Activity>();
   const [progress, setProgress] = useState<ImportProgress>();
   const [selected, setSelected] = useState<FetchResponse>();
+  const [purgePreview, setPurgePreview] = useState<SourcePurgePreview>();
   const [error, setError] = useState<string>();
   const [connection, setConnection] = useState<CodexConnectionPreview>();
   const [connectionBusy, setConnectionBusy] = useState(false);
@@ -115,6 +132,11 @@ export function App() {
     setSources(response.sources);
   }
 
+  async function refreshReceipts() {
+    const response = await window.ownContext.listDeletionReceipts();
+    setReceipts(response.receipts);
+  }
+
   async function refreshConnection() {
     const response = await window.ownContext.previewCodexConnection();
     setConnection(response);
@@ -125,6 +147,7 @@ export function App() {
     void Promise.all([
       window.ownContext.getStatus().then((value) => setStatus(value.mode)),
       refreshSources(),
+      refreshReceipts(),
     ]).catch((reason: unknown) => setError(String(reason)));
     return stopListening;
   }, []);
@@ -146,7 +169,7 @@ export function App() {
         setNotice("Import canceled. The previous complete vault state was preserved.");
       } else if (!response.canceled) {
         setNotice(summarizeImport(response.result));
-        await refreshSources();
+        await Promise.all([refreshSources(), refreshReceipts()]);
       }
     } catch (reason) {
       setError(String(reason));
@@ -186,6 +209,64 @@ export function App() {
       setSelected(response ?? undefined);
     } catch (reason) {
       setError(String(reason));
+    }
+  }
+
+  async function beginSourcePurge(source: VaultSource) {
+    setError(undefined);
+    try {
+      const response = await window.ownContext.prepareSourcePurge(source.sourceId);
+      if (response.status === "ready") {
+        setPurgePreview(response.preview);
+      } else if (response.status === "import-in-progress") {
+        setNotice("Wait for the current import to finish before removing a source.");
+      } else {
+        setNotice("That source is no longer present. No deletion receipt was created.");
+        await refreshSources();
+      }
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function confirmSourcePurge() {
+    if (!purgePreview) return;
+    setActivity("purge");
+    setError(undefined);
+    try {
+      const response = await window.ownContext.purgeSource({
+        sourceId: purgePreview.sourceId,
+        confirmationToken: purgePreview.confirmationToken,
+        expectedDocumentCount: purgePreview.documentCount,
+        expectedLastScannedAt: purgePreview.lastScannedAt,
+      });
+      if (response.status === "purged") {
+        setResults([]);
+        setSelected(undefined);
+        setPurgePreview(undefined);
+        setNotice(
+          `Source removed from OwnContext · receipt ${response.receipt.receiptId.slice(0, 12)}…`,
+        );
+        await Promise.all([refreshSources(), refreshReceipts()]);
+      } else if (response.status === "canceled") {
+        setPurgePreview(undefined);
+        setNotice("Removal canceled. The source remains in OwnContext.");
+      } else if (response.status === "stale-confirmation") {
+        setPurgePreview(undefined);
+        setNotice("The source changed after confirmation. Review its current contents and try again.");
+        await refreshSources();
+      } else if (response.status === "import-in-progress") {
+        setPurgePreview(undefined);
+        setNotice("Removal was blocked because an import is in progress. No data was deleted.");
+      } else {
+        setPurgePreview(undefined);
+        setNotice("The source was already absent. No deletion receipt was created.");
+        await refreshSources();
+      }
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setActivity(undefined);
     }
   }
 
@@ -293,9 +374,14 @@ export function App() {
             notice={isImporting ? progressText(progress) : notice}
             query={query}
             results={results}
+            receipts={receipts}
             selected={selected}
             sources={sources}
+            purgePreview={purgePreview}
             onFetch={handleFetch}
+            onBeginSourcePurge={beginSourcePurge}
+            onCancelSourcePurge={() => setPurgePreview(undefined)}
+            onConfirmSourcePurge={confirmSourcePurge}
             onQueryChange={setQuery}
             onSearch={handleSearch}
             onCloseSelected={() => setSelected(undefined)}
@@ -319,9 +405,14 @@ interface LibraryViewProps {
   notice: string;
   query: string;
   results: Result[];
+  receipts: DeletionReceiptView[];
   selected: FetchResponse | undefined;
   sources: VaultSource[];
+  purgePreview: SourcePurgePreview | undefined;
   onFetch: (result: Result) => void;
+  onBeginSourcePurge: (source: VaultSource) => void;
+  onCancelSourcePurge: () => void;
+  onConfirmSourcePurge: () => void;
   onQueryChange: (value: string) => void;
   onSearch: (event: FormEvent) => void;
   onCloseSelected: () => void;
@@ -393,10 +484,37 @@ function LibraryView(props: LibraryViewProps) {
                       ? `Scanned ${new Date(source.lastScannedAt).toLocaleString()}`
                       : "Import incomplete"}
                   </time>
+                  <button
+                    className="source-remove"
+                    type="button"
+                    disabled={props.activity !== undefined}
+                    onClick={() => props.onBeginSourcePurge(source)}
+                  >
+                    Remove from OwnContext
+                  </button>
                 </div>
               ))}
             </div>
           )}
+
+          {props.receipts.length > 0 ? (
+            <div className="receipt-list" aria-label="Recent deletion receipts">
+              <p className="eyebrow">RECENT REMOVALS</p>
+              {props.receipts.slice(0, 3).map((receipt) => (
+                <article
+                  className={`receipt ${receipt.verificationStatus}`}
+                  key={receipt.receiptId}
+                >
+                  <strong>{receiptStatus(receipt)}</strong>
+                  <p>
+                    {receipt.documentCount} documents · {receipt.revisionCount} revisions · {receipt.chunkCount} chunks
+                  </p>
+                  <time>{new Date(receipt.completedAt).toLocaleString()}</time>
+                  <code title={receipt.receiptId}>{receipt.receiptId.slice(0, 16)}…</code>
+                </article>
+              ))}
+            </div>
+          ) : null}
         </aside>
       </div>
 
@@ -411,6 +529,64 @@ function LibraryView(props: LibraryViewProps) {
           </div>
           <p className="source-uri">{props.selected.sourceUri}</p>
           <pre>{props.selected.content}</pre>
+        </div>
+      ) : null}
+
+      {props.purgePreview ? (
+        <div className="modal-backdrop">
+          <div
+            className="purge-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="purge-source-title"
+          >
+            <p className="eyebrow">CONFIRM LOCAL REMOVAL</p>
+            <h3 id="purge-source-title">Remove “{props.purgePreview.name}” from OwnContext?</h3>
+            <p className="purge-summary">
+              This removes the indexed local copy of {props.purgePreview.documentCount} document
+              {props.purgePreview.documentCount === 1 ? "" : "s"}, every stored revision, chunks,
+              search-index entries, and linked retrieval-audit rows.
+            </p>
+            <dl className="purge-boundaries">
+              <div>
+                <dt>Original folder</dt>
+                <dd>Not changed or deleted</dd>
+              </div>
+              <div>
+                <dt>External AI excerpts</dt>
+                <dd>Transferred or in-progress excerpts are outside this removal</dd>
+              </div>
+              <div>
+                <dt>Deletion assurance</dt>
+                <dd>Logical non-addressability, not secure disk erasure</dd>
+              </div>
+            </dl>
+            <p className="source-uri" title={props.purgePreview.rootUri}>
+              {props.purgePreview.rootUri}
+            </p>
+            <p className="purge-reimport-note">
+              Adding this folder again later can import its files again. A content-free receipt is
+              stored only after every local-vault deletion step succeeds.
+            </p>
+            <div className="purge-actions">
+              <button
+                className="secondary"
+                type="button"
+                disabled={props.activity === "purge"}
+                onClick={props.onCancelSourcePurge}
+              >
+                Keep source
+              </button>
+              <button
+                className="danger-action"
+                type="button"
+                disabled={props.activity === "purge"}
+                onClick={props.onConfirmSourcePurge}
+              >
+                {props.activity === "purge" ? "Removing…" : "Remove local copy"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </section>
