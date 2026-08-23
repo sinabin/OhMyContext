@@ -157,9 +157,16 @@ Deliverables:
 - Draft application-payload notices, SPDX SBOM, checksums, and constrained
   outer-installer transform provenance are implemented. A draft outer bundle
   now binds the Setup, `.nupkg`, `RELEASES`, compliance evidence, source commit,
-  lockfile, and Authenticode status; it remains explicitly non-public. OS
-  keychain integration, signed updates, complete maker-layer license evidence,
-  and parser isolation remain release work.
+  lockfile, packaged synthetic Windows key-envelope evidence, and Authenticode
+  status; it remains explicitly non-public. The core storage interface and a
+  packaged async Electron `safeStorage` round trip are prototype-verified. A
+  bounded read-only header/WAL parser requires matching WAL mode, preserves a
+  stopped future-schema main/WAL fixture exactly, and the key smoke rejects byte
+  and UTF-16 plaintext no-op wrappers. The real DB/FTS/WAL/backups are still
+  plaintext; atomic
+  probe/open under an external writer, independent DPAPI evidence, native
+  encrypted storage, broker/bridge isolation, signed updates, complete
+  maker-layer license evidence, and parser isolation remain release work.
 - Keep build hosts isolated while the stable Electron Forge dependency tree has
   unresolved archive/extraction advisories; accept an upgrade only after the
   complete Windows make and smoke matrix passes.

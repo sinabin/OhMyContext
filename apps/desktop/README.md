@@ -105,6 +105,12 @@ matched to a canonical form with only bounded random identifiers. A
 deterministic draft record is created
 atomically under the build's `evidence` directory.
 
+The generated NuSpec is also parsed as namespace-aware XML. Any `iconUrl`
+expanded local name is rejected regardless of prefix, and the exact NuSpec root
+namespace declaration is the only permitted HTTP(S) value. This prevents the
+installer smoke from treating a namespace-prefix or namespace-URL-prefix trick
+as offline metadata.
+
 The same directory also receives `OWNCONTEXT-RELEASE-CANDIDATE.json`,
 `OWNCONTEXT-RELEASE-SHA256SUMS`, and an exact copy of the source
 `package-lock.json`. The candidate manifest binds the Setup EXE, `.nupkg`,
@@ -113,6 +119,20 @@ worktree state, project-license state, and Windows Authenticode result. It
 deliberately records `publicRelease: false` and explicit blockers. It contains
 no absolute local paths. This outer checksum is additional draft evidence, not
 a public manifest or a signature.
+
+Authenticode inspection holds the Setup file in a read-only, write/delete-
+denying share mode while it computes SHA-256 and queries the signature. The
+reported inspection hash must equal the maker-provenance hash, and the Setup is
+hashed again afterward. Maker provenance is likewise parsed, validated, and
+hashed from two matching reads of one handle, then rechecked after the signature
+phase before that same record enters the bundle.
+
+The key-storage evidence is opened only after real-path containment and regular
+file checks, then its open-handle identity and final file state are compared.
+Two matching bounded reads from that handle are required before the bytes are
+schema-validated, sized, and SHA-256 hashed. The manifest therefore rejects an
+observed in-place rewrite or parent-junction swap instead of validating one
+generation while recording another.
 
 This evidence covers the unpacked application payload and a constrained,
 semantic maker transform from pinned inputs, but it is not bit-for-bit
@@ -235,3 +255,16 @@ planned, not an implemented connection in this alpha. Use non-sensitive fixture
 data only. A cloud AI client can send retrieved excerpts to its configured model
 provider even though storage and retrieval run locally. Returned provenance
 metadata can also include titles, source paths, timestamps, and stable IDs.
+
+The current core requires callers to select the visibly labeled plaintext
+development storage provider; there is no implicit storage fallback. A separate
+packaged Windows smoke verifies only a synthetic 32-byte key envelope through
+async Electron `safeStorage` and rejects a decoded wrapper that still contains
+the tested raw, UTF-8, UTF-16, or UTF-32 key encodings. It is not connected to
+the vault, so the database, FTS, WAL, temporary state, and configuration backups
+remain plaintext and the UI continues to report encryption as not implemented.
+The compatibility probe reads the main header and only applies checksum-valid
+WAL frames when both database mode bytes declare WAL. It does not open SQLite or
+create a plaintext copy, caps inspected WAL input at 256 MiB, and fails closed
+on a mismatched WAL sidecar or rollback-journal recovery. Its check and the real
+open are not atomic against a concurrent external writer.

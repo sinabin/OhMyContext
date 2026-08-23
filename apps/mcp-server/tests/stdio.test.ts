@@ -88,7 +88,11 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
       const sourceDirectory = join(root, "source");
       const deniedSourceDirectory = join(root, "denied-source");
       const vaultPath = join(root, "vault.sqlite3");
-      const { importDirectory, openVault } = await import("@owncontext/core");
+      const {
+        createNodeSqliteDevelopmentStorageProvider,
+        importDirectory,
+        openVault,
+      } = await import("@owncontext/core");
       await mkdir(sourceDirectory);
       await mkdir(deniedSourceDirectory);
       await writeFile(
@@ -102,7 +106,10 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
         "utf8",
       );
 
-      const vault = openVault(vaultPath);
+      const vault = openVault(
+        vaultPath,
+        createNodeSqliteDevelopmentStorageProvider(),
+      );
       await importDirectory(vault, sourceDirectory);
       await importDirectory(vault, deniedSourceDirectory, {
         collection: "denied",

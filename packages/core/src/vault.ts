@@ -9,7 +9,6 @@ import {
 import { mkdirSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { chunkDocument, normalizeText, titleFromText } from "./chunking.js";
 import { assertHashId, contentHash, deterministicId } from "./ids.js";
 import {
@@ -19,7 +18,15 @@ import {
   OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL,
   verifyOwnContextSampleLibraryDirectory,
 } from "./sample.js";
-import { initializeSchema } from "./schema.js";
+import { assertSupportedSchemaVersion, initializeSchema } from "./schema.js";
+import {
+  snapshotVaultStorageDescriptor,
+  validateVaultStorageProvider,
+  type VaultStorageConnection,
+  type VaultStorageDescriptor,
+  type VaultStorageProvider,
+  type VaultStorageValue,
+} from "./storage.js";
 import type {
   DeletionReceipt,
   DeletionReceiptVerification,
@@ -65,7 +72,7 @@ interface InternalImportOptions {
 }
 
 interface VaultState {
-  db: DatabaseSync;
+  db: VaultStorageConnection;
   closed: boolean;
   importingSources: Set<string>;
 }
@@ -174,9 +181,15 @@ const states = new WeakMap<Vault, VaultState>();
 
 class VaultHandle implements Vault {
   public readonly path: string;
+  public readonly storage;
 
-  public constructor(path: string, db: DatabaseSync) {
+  public constructor(
+    path: string,
+    db: VaultStorageConnection,
+    storage: VaultStorageDescriptor,
+  ) {
     this.path = path;
+    this.storage = storage;
     states.set(this, { db, closed: false, importingSources: new Set() });
   }
 
@@ -188,22 +201,29 @@ class VaultHandle implements Vault {
   }
 }
 
-export function openVault(dbPath: string): Vault {
+export function openVault(
+  dbPath: string,
+  storageProvider: VaultStorageProvider,
+): Vault {
   if (typeof dbPath !== "string" || dbPath.trim().length === 0) {
     throw new TypeError("dbPath must be a non-empty path or :memory:");
   }
+  const provider = validateVaultStorageProvider(storageProvider);
+  const storage = snapshotVaultStorageDescriptor(provider.descriptor);
   const resolvedPath = dbPath === ":memory:" ? dbPath : resolve(dbPath);
+  const inspectedSchemaVersion = provider.inspectSchemaVersion(resolvedPath);
+  assertSupportedSchemaVersion(inspectedSchemaVersion);
   if (resolvedPath !== ":memory:") {
     mkdirSync(dirname(resolvedPath), { recursive: true });
   }
-  const db = new DatabaseSync(resolvedPath);
+  const db = provider.open(resolvedPath);
   try {
-    initializeSchema(db);
+    initializeSchema(db, inspectedSchemaVersion);
   } catch (error) {
     db.close();
     throw error;
   }
-  return new VaultHandle(resolvedPath, db);
+  return new VaultHandle(resolvedPath, db, storage);
 }
 
 export function importDirectory(
@@ -617,8 +637,8 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
     "d.current_revision_id = c.revision_id",
     "s.last_scanned_at IS NOT NULL",
   ];
-  const whereParameters: SQLInputValue[] = [literalFtsQuery(query)];
-  const scoreParameters: SQLInputValue[] = [];
+  const whereParameters: VaultStorageValue[] = [literalFtsQuery(query)];
+  const scoreParameters: VaultStorageValue[] = [];
   const collectionScoped = input.collection !== undefined;
 
   if (collectionScoped) {
@@ -783,7 +803,7 @@ export function purgeDocument(vault: Vault, documentId: string): boolean {
 }
 
 function sourcePurgeSnapshot(
-  db: DatabaseSync,
+  db: VaultStorageConnection,
   sourceId: string,
 ): SourcePurgeSnapshot | null {
   const source = db.prepare(`
@@ -841,7 +861,7 @@ function validatePurgeSourceInput(input: PurgeSourceInput): void {
   }
 }
 
-function sourcePurgeCounts(db: DatabaseSync, sourceId: string): PurgeCounts {
+function sourcePurgeCounts(db: VaultStorageConnection, sourceId: string): PurgeCounts {
   return {
     sourceCount: countRows(db, "SELECT count(*) AS count FROM sources WHERE id = ?", sourceId),
     documentCount: countRows(
@@ -882,7 +902,7 @@ function sourcePurgeCounts(db: DatabaseSync, sourceId: string): PurgeCounts {
   };
 }
 
-function databaseTotals(db: DatabaseSync): PurgeCounts {
+function databaseTotals(db: VaultStorageConnection): PurgeCounts {
   return {
     sourceCount: countRows(db, "SELECT count(*) AS count FROM sources"),
     documentCount: countRows(db, "SELECT count(*) AS count FROM documents"),
@@ -894,9 +914,9 @@ function databaseTotals(db: DatabaseSync): PurgeCounts {
 }
 
 function countRows(
-  db: DatabaseSync,
+  db: VaultStorageConnection,
   sql: string,
-  ...parameters: SQLInputValue[]
+  ...parameters: VaultStorageValue[]
 ): number {
   const row = db.prepare(sql).get(...parameters) as
     | { count: number | bigint }
@@ -924,7 +944,7 @@ function assertPurgeDeltas(
   }
 }
 
-function insertDeletionReceipt(db: DatabaseSync, receipt: DeletionReceipt): void {
+function insertDeletionReceipt(db: VaultStorageConnection, receipt: DeletionReceipt): void {
   db.prepare(`
     INSERT INTO deletion_receipts(
       id, target_kind, target_id, completed_at, source_count,
@@ -973,7 +993,7 @@ function deletionReceiptFromRow(row: DeletionReceiptRow): DeletionReceipt {
   };
 }
 
-function hasVaultProjectionIntegrityError(db: DatabaseSync): boolean {
+function hasVaultProjectionIntegrityError(db: VaultStorageConnection): boolean {
   if (db.prepare("PRAGMA foreign_key_check").all().length > 0) return true;
 
   // FTS5 virtual tables cannot carry foreign keys. Check both directions so a
@@ -1010,12 +1030,12 @@ function stateFor(vault: Vault): VaultState {
   return state;
 }
 
-function databaseFor(vault: Vault): DatabaseSync {
+function databaseFor(vault: Vault): VaultStorageConnection {
   return stateFor(vault).db;
 }
 
 function importPreparedFile(
-  db: DatabaseSync,
+  db: VaultStorageConnection,
   sourceId: string,
   file: PreparedFile,
   chunkSize: number,
@@ -1378,7 +1398,7 @@ function compareNames(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function transaction<T>(db: DatabaseSync, operation: () => T): T {
+function transaction<T>(db: VaultStorageConnection, operation: () => T): T {
   const name = `owncontext_savepoint_${nextSavepointId++}`;
   db.exec(`SAVEPOINT ${name}`);
   try {
@@ -1394,7 +1414,7 @@ function transaction<T>(db: DatabaseSync, operation: () => T): T {
 
 let nextSavepointId = 1;
 
-function transactionImmediate<T>(db: DatabaseSync, operation: () => T): T {
+function transactionImmediate<T>(db: VaultStorageConnection, operation: () => T): T {
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = operation();
@@ -1407,7 +1427,7 @@ function transactionImmediate<T>(db: DatabaseSync, operation: () => T): T {
 }
 
 async function transactionAsync<T>(
-  db: DatabaseSync,
+  db: VaultStorageConnection,
   operation: () => Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
@@ -1447,7 +1467,7 @@ function literalFtsQuery(query: string): string {
 
 function addDateFilter(
   conditions: string[],
-  parameters: SQLInputValue[],
+  parameters: VaultStorageValue[],
   column: string,
   operator: ">=" | "<=",
   value: string | undefined,

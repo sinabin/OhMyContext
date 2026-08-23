@@ -52,9 +52,27 @@ non-sensitive local evaluation. This is not a signed or publicly releasable
 package, and no public-release claim is made while the security and licensing
 gates remain open. A source-bound draft manifest and outer SHA-256 list now bind
 the local Setup, Squirrel package, compliance evidence, Git commit, lockfile,
-and Authenticode status. The read-only Windows alpha workflow re-verifies this
-bundle but never creates a GitHub Release; it uploads unsigned binaries only
-while the repository is private.
+packaged synthetic Windows key-storage evidence, and Authenticode status. The
+read-only Windows alpha workflow re-verifies this bundle but never creates a
+GitHub Release; it uploads unsigned binaries only while the repository is
+private.
+
+The core now requires every caller to select a storage provider explicitly. The
+only shipped provider is visibly identified as `node-sqlite-development` with a
+`plaintext-development` security profile; there is no implicit plaintext
+fallback. Its bounded, read-only compatibility parser checks the database
+header and, only when both header mode bytes declare WAL, valid WAL frames
+without opening SQLite. A mismatched WAL sidecar or rollback journal fails
+closed; a crash-style
+main-plus-WAL fixture from a newer schema is rejected without changing the
+original files. A packaged Windows x64 smoke also verifies a synthetic 32-byte
+key round trip through Electron's asynchronous `safeStorage` API and rejects
+wrappers that leave the tested raw, UTF-8, UTF-16, or UTF-32 key encodings
+directly recoverable from the envelope. This is key-management foundation
+evidence only: the real SQLite database, FTS index, WAL, temporary state, and
+configuration backups are still plaintext, arbitrary reversible wrappers and
+DPAPI identity are not independently excluded, and the probe/open boundary is
+not yet atomic against an external writer.
 
 ## Implementation status
 
@@ -64,6 +82,7 @@ while the repository is private.
 | Atomic local SQLite/FTS vault | Implemented and prototype-tested |
 | Read-only local stdio MCP | Implemented and real-protocol tested |
 | Desktop import, sample onboarding, search, source removal, and Codex/Claude Code config | Developer alpha |
+| Explicit storage-provider boundary and synthetic Windows key envelope | Prototype-verified; real vault remains plaintext |
 | Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
 
 Each desktop-managed MCP launch is currently pinned to the single `default`

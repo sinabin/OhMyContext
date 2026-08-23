@@ -1,24 +1,31 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { VaultStorageConnection } from "./storage.js";
 
 const SCHEMA_VERSION = 2;
 
-export function initializeSchema(db: DatabaseSync): void {
+export function assertSupportedSchemaVersion(version: number): void {
+  if (!Number.isSafeInteger(version) || version < 0) {
+    throw new Error("Vault schema version is invalid.");
+  }
+  if (version > SCHEMA_VERSION) {
+    throw new Error(
+      `Vault schema version ${version} is newer than supported version ${SCHEMA_VERSION}`,
+    );
+  }
+}
+
+export function initializeSchema(
+  db: VaultStorageConnection,
+  inspectedVersion: number,
+): void {
+  assertSupportedSchemaVersion(inspectedVersion);
+  let version = inspectedVersion;
+
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA busy_timeout = 5000;
     PRAGMA secure_delete = ON;
     PRAGMA journal_mode = WAL;
   `);
-
-  const row = db.prepare("PRAGMA user_version").get() as
-    | { user_version: number }
-    | undefined;
-  let version = Number(row?.user_version ?? 0);
-  if (version > SCHEMA_VERSION) {
-    throw new Error(
-      `Vault schema version ${version} is newer than supported version ${SCHEMA_VERSION}`,
-    );
-  }
 
   if (version === 0) {
     createVersionOne(db);
@@ -35,7 +42,7 @@ export function initializeSchema(db: DatabaseSync): void {
   }
 }
 
-function createVersionOne(db: DatabaseSync): void {
+function createVersionOne(db: VaultStorageConnection): void {
   db.exec(`
     BEGIN IMMEDIATE;
 
@@ -140,7 +147,7 @@ function createVersionOne(db: DatabaseSync): void {
   `);
 }
 
-function migrateVersionOneToTwo(db: DatabaseSync): void {
+function migrateVersionOneToTwo(db: VaultStorageConnection): void {
   db.exec(`
     BEGIN IMMEDIATE;
 
@@ -174,7 +181,7 @@ function migrateVersionOneToTwo(db: DatabaseSync): void {
   `);
 }
 
-function ensureFtsSecureDelete(db: DatabaseSync): void {
+function ensureFtsSecureDelete(db: VaultStorageConnection): void {
   const row = db.prepare(`
     SELECT v FROM chunks_fts_config WHERE k = 'secure-delete'
   `).get() as { v: number | bigint } | undefined;

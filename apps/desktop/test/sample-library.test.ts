@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  createNodeSqliteDevelopmentStorageProvider,
   fetchDocument,
   importOwnContextSampleLibrary,
   openVault,
@@ -138,7 +139,10 @@ describe("built-in sample library materializer", () => {
 
   it("imports through the core and proves English and Korean search plus fetch", async () => {
     const sample = await materializeSampleLibrary(userDataRoot);
-    const vault = openVault(join(testRoot, "sample-vault.sqlite"));
+    const vault = openVault(
+      join(testRoot, "sample-vault.sqlite"),
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
 
     try {
       const imported = await importOwnContextSampleLibrary(

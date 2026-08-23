@@ -128,6 +128,14 @@ and randomized core-properties path allowed. Passing evidence
 is written atomically, without timestamps or absolute paths, to
 `out/<build-id>/evidence/SQUIRREL-MAKER-PROVENANCE.json`.
 
+The repository-owned NuSpec template omits `iconUrl`, preventing Squirrel from
+making installation depend on electron-winstaller's mutable, network-fetched
+default icon. The full-package smoke reads the generated NuSpec from the actual
+`.nupkg`, parses it as namespace-aware XML, and rejects an `iconUrl` expanded
+local name regardless of prefix or any external HTTP(S) reference. Only an
+exact permitted NuSpec namespace declaration on the root is exempt because it
+is an identifier, not an install-time fetch.
+
 These checks establish a constrained semantic transform from the pinned maker
 package subtree to the inspected unsigned output container. They do not pin
 root-hoisted build-dependency bytes or the excluded log contents, establish
@@ -153,10 +161,26 @@ additional files under the unique build's `evidence` directory:
 - `SOURCE-package-lock.json` preserves the exact dependency lockfile used for
   the candidate.
 
+Before that bundle is generated, the packaged application runs a dedicated
+Windows x64 main-process smoke against an isolated OS-temporary profile. It
+wraps and reopens a synthetic 32-byte key using Electron's asynchronous
+`safeStorage`, verifies that its plaintext encoding is absent from the envelope,
+decodes the wrapper payload to reject directly recoverable raw, UTF-8, UTF-16,
+and UTF-32 key encodings, and writes the content-free
+`WINDOWS-KEY-STORAGE-SMOKE.json`. The outer bundle verifies real-path
+containment plus open-handle identity, then requires two bounded reads of that
+handle to match before exact-schema/PASS validation, sizing, and SHA-256. It
+includes that digest in its checksum set. This does not independently
+attest DPAPI, exclude arbitrary reversible wrappers, or establish encryption of the real
+SQLite/FTS/WAL/temp/backup surface and does not remove any public security
+blocker.
+
 Generation refuses to overwrite an existing bundle, requires the exact
 three-file maker inventory recorded by provenance, and compares each maker file
-by path, size, and SHA-256 before writing. Verification recalculates the entire
-manifest and outer checksum from the current files, source identity, license
+by path, size, and SHA-256 before writing. Maker provenance itself is parsed,
+validated, and hashed from two matching reads of one handle, then must match a
+second confirmed read after the signature phase. Verification recalculates the
+entire manifest and outer checksum from the current files, source identity, license
 state, and Authenticode result. The manifest stores no local absolute path or
 PowerShell status message. It always records `publicRelease: false` because the
 current build profile, compliance mode, provenance, version, and product naming
@@ -164,6 +188,13 @@ are developer-alpha only. The draft checker does not choose a license: even
 consistent package metadata plus a `LICENSE` file remains
 `declared-not-release-approved` until the project records a separate release
 approval.
+
+The Windows Authenticode inspector holds the Setup path in a read-only share
+mode that denies concurrent write/delete, computes SHA-256 under that same
+handle lifetime, and queries the signature before releasing it. The returned
+inspection hash must equal the maker-provenance hash, followed by another Setup
+hash, so a transient replacement cannot lend a different binary's signature to
+the recorded candidate.
 
 `.github/workflows/alpha-ci.yml` runs the locked install, full project check,
 Windows make, and a separate release-bundle verification with repository

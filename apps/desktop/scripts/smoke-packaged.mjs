@@ -19,12 +19,21 @@ import {
   getDefaultEnvironment,
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { importDirectory, openVault } from "@owncontext/core";
+import {
+  createNodeSqliteDevelopmentStorageProvider,
+  importDirectory,
+  openVault,
+} from "@owncontext/core";
+import {
+  WINDOWS_KEY_STORAGE_BOUNDARY,
+  isPackagedKeyStorageSmokeResult,
+} from "../../../scripts/key-storage-evidence-policy.mjs";
 import { verifyCompliance } from "../../../scripts/release-compliance.mjs";
 import {
   FORGE_BUILD_ID_ENV,
   validateForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
+import { assertOfflineNuspecMetadata } from "./nuspec-offline-policy.mjs";
 import { verifySquirrelMakerProvenance } from "./squirrel-maker-provenance.mjs";
 import { verifySquirrelPackageInventory } from "./squirrel-package-inventory.mjs";
 
@@ -37,6 +46,7 @@ const squirrelPackageName = "OwnContextDeveloperPreview";
 const applicationExecutableName = "OwnContextDeveloperPreview.exe";
 const setupFileName = "OwnContext-Developer-Preview-Unsigned-Setup.exe";
 const fullPackageFileName = `${squirrelPackageName}-0.0.0-full.nupkg`;
+const keyStorageEvidenceFileName = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgUncompressedBytes = 8 * 1024 * 1024 * 1024;
@@ -136,7 +146,14 @@ function inspectNupkgEntries(nupkgPath) {
     "    $stream = $entry.Open()",
     "    $sha = [System.Security.Cryptography.SHA256]::Create()",
     "    try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose(); $stream.Dispose() }",
-    "    $items += [PSCustomObject]@{ name = $entry.FullName; length = $entry.Length; sha256 = $hash; directory = ($entry.Name.Length -eq 0) }",
+    "    $nuspecText = $null",
+    "    if ($entry.FullName -match '^[^/]+[.]nuspec$') {",
+    "      if ($entry.Length -gt 65536) { throw 'Squirrel NuSpec exceeds metadata-size limit.' }",
+    "      $textStream = $entry.Open()",
+    "      $reader = [System.IO.StreamReader]::new($textStream, [System.Text.UTF8Encoding]::new($false, $true), $true, 4096, $false)",
+    "      try { $nuspecText = $reader.ReadToEnd() } finally { $reader.Dispose(); $textStream.Dispose() }",
+    "    }",
+    "    $items += [PSCustomObject]@{ name = $entry.FullName; length = $entry.Length; sha256 = $hash; directory = ($entry.Name.Length -eq 0); nuspecText = $nuspecText }",
     "  }",
     "  [Console]::Out.Write((ConvertTo-Json -InputObject @($items) -Compress))",
     "} finally { $archive.Dispose() }",
@@ -169,7 +186,8 @@ function inspectNupkgEntries(nupkgPath) {
     typeof entry.name === "string" &&
     Number.isSafeInteger(entry.length) &&
     typeof entry.sha256 === "string" &&
-    typeof entry.directory === "boolean"
+    typeof entry.directory === "boolean" &&
+    (entry.nuspecText === null || typeof entry.nuspecText === "string")
   )) {
     throw new Error("The Squirrel package compliance inventory is malformed.");
   }
@@ -280,6 +298,89 @@ async function runGuiSmoke(executable, temporaryRoot) {
   }
 }
 
+async function runWindowsKeyStorageSmoke(executable, temporaryRoot) {
+  const smokeRoot = resolve(temporaryRoot, "windows-key-storage");
+  await mkdir(smokeRoot);
+  const nonce = randomUUID();
+  const environment = { ...process.env };
+  delete environment.ELECTRON_RUN_AS_NODE;
+  environment.OWNCONTEXT_KEY_STORAGE_SMOKE_ROOT = smokeRoot;
+  environment.OWNCONTEXT_KEY_STORAGE_SMOKE_NONCE = nonce;
+
+  const child = spawn(executable, ["--owncontext-key-storage-smoke"], {
+    cwd: dirname(executable),
+    env: environment,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await new Promise((resolvePromise, rejectPromise) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 30_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (!timedOut && code === 0) {
+        resolvePromise();
+        return;
+      }
+      rejectPromise(new Error(
+        timedOut
+          ? "Packaged Windows key-storage smoke timed out."
+          : `Packaged Windows key-storage smoke failed (${signal ?? String(code)}).`,
+      ));
+    });
+  });
+
+  const resultPath = resolve(smokeRoot, "key-storage-smoke.json");
+  const resultMetadata = await stat(resultPath);
+  if (!resultMetadata.isFile() || resultMetadata.size < 1 || resultMetadata.size > 16 * 1024) {
+    throw new Error("Packaged Windows key-storage evidence is not a bounded file.");
+  }
+  const result = JSON.parse(await readFile(resultPath, "utf8"));
+  if (!isPackagedKeyStorageSmokeResult(result, nonce)) {
+    throw new Error("Packaged Windows key-storage evidence is invalid.");
+  }
+  return result;
+}
+
+async function writeWindowsKeyStorageEvidence(buildDirectory, result) {
+  const evidence = {
+    schemaVersion: 2,
+    status: "DRAFT — NOT FOR PUBLIC RELEASE",
+    control: "windows-safe-storage-key-envelope-spike",
+    result: "PASS",
+    runtime: {
+      platform: result.platform,
+      architecture: result.architecture,
+      isPackaged: result.isPackaged,
+    },
+    protector: {
+      providerId: result.providerId,
+      asyncAvailable: result.safeStorageAsyncAvailable,
+    },
+    envelope: {
+      schemaVersion: result.envelopeSchemaVersion,
+      keyBytes: result.keyBytes,
+      persisted: result.envelopePersisted,
+      knownPlaintextEncodingsAbsent: result.knownPlaintextEncodingsAbsent,
+      roundTripMatched: result.roundTripMatched,
+      shouldReEncrypt: result.shouldReEncrypt,
+    },
+    boundary: WINDOWS_KEY_STORAGE_BOUNDARY,
+  };
+  await writeFile(
+    resolve(buildDirectory, "evidence", keyStorageEvidenceFileName),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
+}
+
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("The packaged smoke test requires a Windows x64 host.");
 }
@@ -314,6 +415,13 @@ if (requireMaker) {
   const makerDirectory = resolve(buildDirectory, "make", "squirrel.windows", "x64");
   const nupkgPath = resolve(makerDirectory, fullPackageFileName);
   const nupkgEntries = inspectNupkgEntries(nupkgPath);
+  const nuspecEntries = nupkgEntries.filter((entry) => entry.nuspecText !== null);
+  if (nuspecEntries.length !== 1) {
+    throw new Error(
+      "Squirrel package metadata would make installation depend on an external icon download.",
+    );
+  }
+  assertOfflineNuspecMetadata(nuspecEntries[0].nuspecText);
   const payloadFiles = await inventoryPackagedFiles(packagedDirectory);
   verifySquirrelPackageInventory({
     payloadFiles,
@@ -373,6 +481,13 @@ const fixtureDirectory = resolve(temporaryRoot, "fixture-source");
 const fixtureToken = "packagedfixturetoken";
 
 try {
+  const keyStorageResult = await runWindowsKeyStorageSmoke(
+    executable,
+    temporaryRoot,
+  );
+  if (requireMaker) {
+    await writeWindowsKeyStorageEvidence(buildDirectory, keyStorageResult);
+  }
   await runGuiSmoke(executable, temporaryRoot);
   await mkdir(fixtureDirectory);
   await writeFile(
@@ -380,7 +495,10 @@ try {
     `# Packaged smoke fixture\n\nThe ${fixtureToken} proves import, search, and fetch.\n`,
     "utf8",
   );
-  const seedVault = openVault(vaultPath);
+  const seedVault = openVault(
+    vaultPath,
+    createNodeSqliteDevelopmentStorageProvider(),
+  );
   try {
     const imported = await importDirectory(seedVault, fixtureDirectory, {
       collection: "packaged-smoke",

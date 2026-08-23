@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-23
 
-Status: **Designed, not implemented**
+Status: **Foundation prototype verified; vault encryption not implemented**
 
 This document records the encryption architecture selected for the Windows-first
 OwnContext release. It is an implementation contract and spike plan, not a
@@ -56,9 +56,12 @@ packaged Windows test matrix below.
 The following facts are directly observable in the repository and current
 Windows development runtime:
 
-- `packages/core/src/vault.ts` imports `DatabaseSync` from `node:sqlite` and
-  opens the resolved file path with `new DatabaseSync(resolvedPath)`. It supplies
-  no key and has no encrypted-storage adapter.
+- `packages/core/src/vault.ts` now depends on a narrow storage-provider
+  interface. The only shipped implementation, in `packages/core/src/storage.ts`,
+  wraps `node:sqlite` and declares the exact profile
+  `plaintext-development` / `none` / `none`. Desktop, MCP, and test callers must
+  select it explicitly; no implicit fallback exists. This boundary does not
+  supply a key or encrypt storage.
 - `packages/core/src/schema.ts` stores normalized revision and chunk bodies in
   `TEXT` columns and copies titles, heading paths, and chunk content into the
   `chunks_fts` FTS5 virtual table.
@@ -81,8 +84,57 @@ application-level encryption is absent. They do not show that content can be
 securely erased from SSD media, nor that adding a cipher to the main `.sqlite`
 file would automatically protect every auxiliary artifact.
 
+## Implemented foundation evidence
+
+The first implementation slice deliberately remains separate from the real
+vault:
+
+- `packages/core/src/storage.ts` defines the connection/provider contract and
+  rejects missing or internally inconsistent security metadata before it
+  creates a database directory. Vault handles expose an immutable descriptor
+  snapshot. A provider that merely calls itself `encrypted-candidate` is not
+  release evidence; the future provider must still pass the cipher-status and
+  at-rest matrix in this document.
+- The plaintext provider inspects the 100-byte database header and, only when
+  both header mode bytes declare WAL, checksum-valid WAL frames through
+  read-only file descriptors before it opens SQLite. It caps WAL inspection at
+  256 MiB and fails closed on a mismatched WAL sidecar or rollback journal. A
+  stopped crash-style fixture whose main header is version 2 and
+  committed WAL is version 99 is rejected with identical original inventory and
+  exact main/WAL bytes; no SHM or plaintext snapshot is created. The probe/open
+  calls are not atomic against a concurrent external writer. That generation
+  race is a public-provider design gate, not a release property.
+- `apps/desktop/src/electron/vault-key-envelope.ts` implements a strict,
+  bounded v1 envelope for a random 32-byte synthetic DEK. It uses the async
+  Electron `safeStorage` contract, exclusive same-directory publication,
+  callback-scoped key access, best-effort Buffer zeroization, content-free
+  errors, and reports `shouldReEncrypt` without silently rewriting the file.
+- The dedicated `--owncontext-key-storage-smoke` path runs only in the packaged
+  Electron main process with a new OS-temporary profile. On Windows x64,
+  `npm run package:win --workspace @owncontext/desktop` completed the wrap,
+  persist, reopen, unwrap, and equality checks. Before reporting success it
+  decodes the stored wrapper payload and rejects any occurrence of the raw key
+  or the tested UTF-8, UTF-16LE/BE, and UTF-32LE/BE string encodings; byte and
+  UTF-16 no-op `safeStorage` counterexamples are regression tests. It writes no
+  key, encoded key, envelope path, or ciphertext to its success result. This
+  does not exclude arbitrary reversible transforms or independently attest
+  DPAPI; direct DPAPI comparison and a different-Windows-account rejection test
+  remain in the acceptance matrix.
+- A full maker run records the content-free result as
+  `evidence/WINDOWS-KEY-STORAGE-SMOKE.json`, and the outer draft bundle validates
+  and hashes one bounded read of that file, so schema validation and the
+  recorded digest cannot observe different file generations. The evidence
+  explicitly says it does not cover the real SQLite vault or public release.
+
+This slice demonstrates that the selected OS-key API and envelope state machine
+can execute in the packaged Windows main process. It does not encrypt SQLite,
+FTS, WAL, temporary files, client-configuration backups, or migration state;
+the desktop UI therefore continues to report encryption as not implemented.
+
 Primary references:
 
+- SQLite database-header, WAL-frame, commit-marker, and checksum format:
+  <https://www.sqlite.org/fileformat.html>
 - Electron `safeStorage` and Windows DPAPI semantics:
   <https://www.electronjs.org/docs/latest/api/safe-storage>
 - Windows DPAPI `CryptProtectData` contract:
@@ -419,6 +471,8 @@ captured from a packaged Windows x64 release candidate, not only unit tests.
 
 1. Introduce storage and key-provider interfaces with the existing plaintext
    backend retained only for tests/developer fixtures and visibly labeled.
+   **Prototype verified.** The packaged synthetic safeStorage envelope is also
+   verified, but it is not connected to the vault.
 2. Run the Windows encrypted-provider and named-pipe spikes; record exact version,
    build, license, performance, and adversarial evidence.
 3. Implement the broker/bridge split and make direct MCP database opening an
@@ -428,16 +482,18 @@ captured from a packaged Windows x64 release candidate, not only unit tests.
 5. Run the complete packaged matrix plus the wider security/release gates in
    `SECURITY_MODEL.md` and `RELEASE_COMPLIANCE.md`.
 
-Until step 5 passes, the only accurate status is **encryption designed, not
-implemented**. This work does not unblock public sensitive-data claims, public
-binary distribution, or a signed update channel by itself.
+Until step 5 passes, the only accurate product status is **key-management
+foundation verified; vault encryption not implemented**. This work does not
+unblock public sensitive-data claims, public binary distribution, or a signed
+update channel by itself.
 
 ## Decision boundary
 
-The topology, ownership boundary, key hierarchy, migration posture, and failure
-tests are selected. The exact native encrypted-SQLite provider and Win32 pipe
-helper are `[verification limitation]` items because no candidate has yet passed
-the packaged Windows spike, dependency-license review, cipher/integrity tests,
-and native supply-chain audit. This does not block continued local development
-with synthetic non-sensitive fixtures. It blocks implementation claims and any
+The topology, ownership boundary, key hierarchy, migration posture, storage
+interface, and isolated safeStorage envelope behavior are selected. The exact
+native encrypted-SQLite provider and Win32 pipe helper are `[verification
+limitation]` items because no candidate has yet passed the packaged Windows
+spike, dependency-license review, cipher/integrity tests, and native
+supply-chain audit. This does not block continued local development with
+synthetic non-sensitive fixtures. It blocks implementation claims and any
 public statement that OwnContext protects personal vault data at rest.

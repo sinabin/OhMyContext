@@ -1,5 +1,8 @@
+import type { VaultStorageDescriptor } from "./storage.js";
+
 export interface Vault {
   readonly path: string;
+  readonly storage: VaultStorageDescriptor;
   close(): void;
 }
 

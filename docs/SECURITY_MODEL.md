@@ -23,6 +23,21 @@ whole Claude configuration backups, authenticated AI-client executable
 discovery, signed packaging and updates, comprehensive filesystem adversarial
 coverage, and packaged-release validation remain unimplemented or unverified.
 
+The core now requires an explicit storage provider and labels the only shipped
+`node:sqlite` implementation as `plaintext-development`. A separate packaged
+Windows x64 smoke has verified async Electron `safeStorage` wrapping and
+reopening of a synthetic 32-byte key in a strict envelope, including rejection
+of no-op wrappers whose decoded payload exposes tested raw, UTF-8, UTF-16, or
+UTF-32 key encodings. A bounded read-only database-header/WAL parser only uses a
+WAL when both database mode bytes declare WAL, fails closed on mismatched
+sidecars, and rejects a stopped crash-style WAL from a future schema without
+changing the original main/WAL inventory or bytes.
+Neither change keys the real database: SQLite, FTS, WAL, temporary state, and
+whole configuration backups remain plaintext. The compatibility probe and real
+open are not atomic against a concurrent external writer. The UI continues to
+report encryption as not implemented, and the public encryption gate remains
+open.
+
 Security status uses three labels:
 
 - **Designed** — behavior is specified but not implemented.
@@ -249,7 +264,7 @@ in plaintext.
 | Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability, per-client history, ACL/race-safe recovery, and disclosure tests pass | Codex and user-scoped Claude Code cases prototype-tested for non-sensitive fixtures; override-target tracking, DACL preservation, atomic CAS, and whole-backup lifecycle unverified; Claude Desktop Extension planned |
 | Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Source-level logical purge and receipt prototype verified; portable export and complete residue coverage remain designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
-| Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Designed |
+| Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Explicit plaintext-provider boundary and packaged synthetic OS-key envelope prototype verified; real DB/index/WAL/temp/backups remain plaintext |
 | Parser process isolation and resource limits | Milestone 6 | Required for every untrusted format | Designed |
 | Signed installers/updates/connectors, authenticated client executables, SBOM, release artifact checks | Milestone 6 | Required | Unsigned developer preview and draft artifact evidence exist; signing and client source/publisher validation remain designed |
 | Cross-vault, injection-impact, deletion, export, and log suites | Milestone 6 | Required with zero unauthorized canary disclosure | Designed |

@@ -4,6 +4,11 @@ import { resolveForgeBuildIdentifier } from "./scripts/forge-build-id.mjs";
 
 const desktopDirectory = dirname(fileURLToPath(import.meta.url));
 const generatedRuntime = resolve(desktopDirectory, ".forge-runtime");
+const squirrelNuspecTemplate = resolve(
+  desktopDirectory,
+  "packaging",
+  "squirrel.nuspectemplate",
+);
 const previewNotice = resolve(
   desktopDirectory,
   "packaging",
@@ -71,6 +76,7 @@ const config = {
         authors: "OwnContext project contributors",
         description:
           "Unsigned developer preview for non-sensitive OwnContext evaluation data.",
+        nuspecTemplate: squirrelNuspecTemplate,
         // electron-winstaller's default NuSpec template omits these two
         // extensionless/HTML Electron payload files. Keep the installed image
         // byte-equivalent to the package that compliance inspected.

@@ -16,10 +16,18 @@ export async function runStdioServer(): Promise<void> {
   const allowedCollection = resolveAllowedCollection();
   mkdirSync(dirname(vaultPath), { recursive: true });
 
-  const { fetchDocument, openVault, searchVault } = await import(
+  const {
+    createNodeSqliteDevelopmentStorageProvider,
+    fetchDocument,
+    openVault,
+    searchVault,
+  } = await import(
     "@owncontext/core"
   );
-  const vault = openVault(vaultPath);
+  const vault = openVault(
+    vaultPath,
+    createNodeSqliteDevelopmentStorageProvider(),
+  );
   let closed = false;
 
   const closeVault = (): void => {

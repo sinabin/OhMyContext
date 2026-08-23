@@ -6,9 +6,11 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  safeStorage,
   type IpcMainInvokeEvent,
 } from "electron";
 import {
+  createNodeSqliteDevelopmentStorageProvider,
   fetchDocument,
   importDirectory,
   importOwnContextSampleLibrary,
@@ -34,6 +36,10 @@ import {
   type ClaudeCodeMcpLaunch,
 } from "./claude-code-config.js";
 import { isTrustedIpcSender } from "./ipc-trust.js";
+import {
+  prepareKeyStorageSmoke,
+  runKeyStorageSmoke,
+} from "./key-storage-smoke.js";
 import {
   prepareGuiSmoke,
   runGuiSmokeJourney,
@@ -85,7 +91,10 @@ function databasePath(): string {
 
 function requireVault(): Vault {
   if (!vault) {
-    vault = openVault(databasePath());
+    vault = openVault(
+      databasePath(),
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
   }
 
   return vault;
@@ -460,6 +469,22 @@ app.setAppUserModelId(
 );
 
 async function bootstrap(): Promise<void> {
+  const keyStorageSmoke = prepareKeyStorageSmoke();
+  if (keyStorageSmoke) {
+    app.setPath("userData", keyStorageSmoke.userDataPath);
+    // Electron does not emit `ready` until main-module evaluation finishes.
+    // Register the continuation and return instead of top-level-awaiting the
+    // readiness promise, which would deadlock the packaged smoke process.
+    void app.whenReady()
+      .then(() => runKeyStorageSmoke(keyStorageSmoke, safeStorage, app.isPackaged))
+      .then(() => app.exit(0))
+      .catch(() => {
+        process.stderr.write("OwnContext key-storage verification failed.\n");
+        app.exit(1);
+      });
+    return;
+  }
+
   const guiSmoke = prepareGuiSmoke();
   if (guiSmoke) {
     app.setPath("userData", guiSmoke.userDataPath);

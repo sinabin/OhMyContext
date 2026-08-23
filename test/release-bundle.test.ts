@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
+  open,
   readFile,
+  rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { WINDOWS_KEY_STORAGE_BOUNDARY } from "../scripts/key-storage-evidence-policy.mjs";
 import {
   generateReleaseBundle,
+  inspectKeyStorageEvidenceFile,
   verifyReleaseBundle,
 } from "../scripts/release-bundle.mjs";
 
@@ -121,15 +127,37 @@ async function fixture() {
     join(evidenceRoot, "SQUIRREL-MAKER-PROVENANCE.json"),
     `${JSON.stringify(provenance, null, 2)}\n`,
   );
+  const keyStorageEvidence = {
+    schemaVersion: 2,
+    status: "DRAFT — NOT FOR PUBLIC RELEASE",
+    control: "windows-safe-storage-key-envelope-spike",
+    result: "PASS",
+    runtime: { platform: "win32", architecture: "x64", isPackaged: true },
+    protector: { providerId: "electron-safe-storage", asyncAvailable: true },
+    envelope: {
+      schemaVersion: 1,
+      keyBytes: 32,
+      persisted: true,
+      knownPlaintextEncodingsAbsent: true,
+      roundTripMatched: true,
+      shouldReEncrypt: false,
+    },
+    boundary: WINDOWS_KEY_STORAGE_BOUNDARY,
+  };
+  await writeFile(
+    join(evidenceRoot, "WINDOWS-KEY-STORAGE-SMOKE.json"),
+    `${JSON.stringify(keyStorageEvidence, null, 2)}\n`,
+  );
 
   const sourceInspector = async () => ({
     commit,
     trackedWorktreeClean: true,
     repository: null,
   });
-  const unsignedInspector = async () => ({
+  const unsignedInspector = async (path: string) => ({
     status: "NotSigned",
     statusMessage: "fixture path must not enter the manifest",
+    inspectedSha256: sha256(await readFile(path)),
     signerSubject: null,
     signerThumbprint: null,
     timestamperSubject: null,
@@ -172,6 +200,7 @@ describe("release candidate bundle", () => {
     ]);
     expect(manifest.artifacts[0].authenticode).toEqual({
       status: "NotSigned",
+      inspectedSha256: sha256("unsigned setup fixture"),
       valid: false,
       timestamped: false,
       signerSubject: null,
@@ -184,12 +213,13 @@ describe("release candidate bundle", () => {
     expect(manifest.projectLicense.status).toBe("unresolved");
     expect(manifest.readiness.blockers).toContain("installer-not-authenticode-valid");
     expect(manifest.readiness.blockers).toContain("project-license-unresolved");
-    expect(manifest.releaseChecksums.entryCount).toBe(8);
+    expect(manifest.releaseChecksums.entryCount).toBe(9);
 
     const checksums = await readFile(generated.releaseChecksumsPath, "utf8");
     expect(checksums).toContain("OwnContext-Developer-Preview-Unsigned-Setup.exe");
     expect(checksums).toContain("evidence/SOURCE-package-lock.json");
-    expect(checksums.trim().split("\n")).toHaveLength(8);
+    expect(checksums).toContain("evidence/WINDOWS-KEY-STORAGE-SMOKE.json");
+    expect(checksums.trim().split("\n")).toHaveLength(9);
     await expect(verifyReleaseBundle({
       ...f,
       signatureInspector: f.unsignedInspector,
@@ -217,6 +247,159 @@ describe("release candidate bundle", () => {
     })).rejects.toMatchObject({ code: "OUTPUT_INVENTORY_INVALID" });
   });
 
+  it("rejects self-asserted or malformed packaged key-storage evidence", async () => {
+    const f = await fixture();
+    const evidencePath = join(f.evidenceRoot, "WINDOWS-KEY-STORAGE-SMOKE.json");
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    evidence.envelope.knownPlaintextEncodingsAbsent = false;
+    await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+
+    await expect(generateReleaseBundle({
+      ...f,
+      signatureInspector: f.unsignedInspector,
+    })).rejects.toMatchObject({ code: "KEY_STORAGE_EVIDENCE_INVALID" });
+  });
+
+  it("rejects packaged key-storage evidence that overclaims real-vault encryption", async () => {
+    const f = await fixture();
+    const evidencePath = join(f.evidenceRoot, "WINDOWS-KEY-STORAGE-SMOKE.json");
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    evidence.boundary.proves = "The real SQLite vault is fully encrypted and release-ready.";
+    await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+
+    await expect(generateReleaseBundle({
+      ...f,
+      signatureInspector: f.unsignedInspector,
+    })).rejects.toMatchObject({ code: "KEY_STORAGE_EVIDENCE_INVALID" });
+  });
+
+  it("rejects a parent-junction swap between containment check and evidence open", async () => {
+    const f = await fixture();
+    const evidenceDirectory = join(f.buildRoot, "evidence");
+    const evidencePath = join(evidenceDirectory, "WINDOWS-KEY-STORAGE-SMOKE.json");
+    const preservedDirectory = join(f.buildRoot, "evidence-before-swap");
+    const outsideDirectory = join(f.projectRoot, "outside-evidence");
+    await mkdir(outsideDirectory);
+    await copyFile(
+      evidencePath,
+      join(outsideDirectory, "WINDOWS-KEY-STORAGE-SMOKE.json"),
+    );
+    let swapped = false;
+
+    await expect(inspectKeyStorageEvidenceFile({
+      buildRoot: f.buildRoot,
+      path: evidencePath,
+      openFile: async (path, flags) => {
+        if (!swapped) {
+          swapped = true;
+          await rename(evidenceDirectory, preservedDirectory);
+          await symlink(
+            outsideDirectory,
+            evidenceDirectory,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        }
+        return open(path, flags);
+      },
+    })).rejects.toMatchObject({ code: "FILE_CHANGED" });
+  });
+
+  it("rejects deletion between evidence path validation and open", async () => {
+    const f = await fixture();
+    const evidencePath = join(f.evidenceRoot, "WINDOWS-KEY-STORAGE-SMOKE.json");
+
+    await expect(inspectKeyStorageEvidenceFile({
+      buildRoot: f.buildRoot,
+      path: evidencePath,
+      openFile: async (path, flags) => {
+        await rm(path);
+        return open(path, flags);
+      },
+    })).rejects.toMatchObject({ code: "FILE_CHANGED" });
+  });
+
+  it("rejects an equal-length in-place evidence rewrite during inspection", async () => {
+    const f = await fixture();
+    const evidencePath = join(f.evidenceRoot, "WINDOWS-KEY-STORAGE-SMOKE.json");
+    const original = await readFile(evidencePath);
+    const marker = Buffer.from('"result": "PASS"', "utf8");
+    const replacement = Buffer.from('"result": "FAIL"', "utf8");
+    const markerOffset = original.indexOf(marker);
+    expect(markerOffset).toBeGreaterThanOrEqual(0);
+    const writer = await open(evidencePath, "r+");
+    let mutated = false;
+
+    await expect(inspectKeyStorageEvidenceFile({
+      buildRoot: f.buildRoot,
+      path: evidencePath,
+      openFile: async (path, flags) => {
+        const reader = await open(path, flags);
+        return {
+          stat: reader.stat.bind(reader),
+          read: async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number,
+          ) => {
+            const result = await reader.read(buffer, offset, length, position);
+            if (!mutated && result.bytesRead > 0) {
+              mutated = true;
+              await writer.write(replacement, 0, replacement.byteLength, markerOffset);
+              await writer.sync();
+              await writer.close();
+            }
+            return result;
+          },
+          close: reader.close.bind(reader),
+        };
+      },
+    })).rejects.toMatchObject({ code: "FILE_CHANGED" });
+
+    if (!mutated) await writer.close();
+  });
+
+  it("rejects an installer changed by the Authenticode inspection phase", async () => {
+    const f = await fixture();
+    const signatureInspector = async (path: string) => {
+      const bytes = await readFile(path);
+      bytes[0] ^= 0xff;
+      await writeFile(path, bytes);
+      return f.unsignedInspector(path);
+    };
+
+    await expect(generateReleaseBundle({ ...f, signatureInspector }))
+      .rejects.toMatchObject({ code: "AUTHENTICODE_TARGET_MISMATCH" });
+  });
+
+  it("rejects Authenticode evidence from transient replacement bytes", async () => {
+    const f = await fixture();
+    const signatureInspector = async (path: string) => {
+      const original = await readFile(path);
+      const replacement = Buffer.from(original);
+      replacement[0] ^= 0xff;
+      await writeFile(path, replacement);
+      const inspected = await f.unsignedInspector(path);
+      await writeFile(path, original);
+      return inspected;
+    };
+
+    await expect(generateReleaseBundle({ ...f, signatureInspector }))
+      .rejects.toMatchObject({ code: "AUTHENTICODE_TARGET_MISMATCH" });
+  });
+
+  it("rejects maker provenance changed after artifact validation", async () => {
+    const f = await fixture();
+    const provenancePath = join(f.evidenceRoot, "SQUIRREL-MAKER-PROVENANCE.json");
+    const signatureInspector = async (path: string) => {
+      await writeFile(provenancePath, "{}\n");
+      return f.unsignedInspector(path);
+    };
+
+    await expect(generateReleaseBundle({ ...f, signatureInspector }))
+      .rejects.toMatchObject({ code: "FILE_CHANGED" });
+  });
+
   it("detects source-lockfile and artifact tampering during verification", async () => {
     const f = await fixture();
     await generateReleaseBundle({
@@ -232,9 +415,10 @@ describe("release candidate bundle", () => {
 
   it("does not turn an otherwise signed draft profile into a public release", async () => {
     const f = await fixture();
-    const signatureInspector = async () => ({
+    const signatureInspector = async (path: string) => ({
       status: "Valid",
       statusMessage: "Valid",
+      inspectedSha256: sha256(await readFile(path)),
       signerSubject: "CN=NextH fixture",
       signerThumbprint: "A".repeat(40),
       timestamperSubject: "CN=Timestamp fixture",

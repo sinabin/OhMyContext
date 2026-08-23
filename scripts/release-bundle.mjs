@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import { hasExactKeyStorageBoundary } from "./key-storage-evidence-policy.mjs";
 
 const execFileAsync = promisify(execFile);
 const { COPYFILE_EXCL } = constants;
@@ -22,6 +23,7 @@ const MANIFEST_NAME = "OWNCONTEXT-RELEASE-CANDIDATE.json";
 const CHECKSUM_NAME = "OWNCONTEXT-RELEASE-SHA256SUMS";
 const SOURCE_LOCK_NAME = "SOURCE-package-lock.json";
 const MAKER_EVIDENCE_NAME = "SQUIRREL-MAKER-PROVENANCE.json";
+const KEY_STORAGE_EVIDENCE_NAME = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const PACKAGED_DIRECTORY_NAME = "OwnContext Developer Preview-win32-x64";
 const MAKER_RELATIVE_DIRECTORY = "make/squirrel.windows/x64";
 const EVIDENCE_RELATIVE_DIRECTORY = "evidence";
@@ -153,7 +155,19 @@ async function renderReleaseBundle(context, signatureInspector, sourceInspector)
   const source = normalizeSourceIdentity(await sourceInspector(context.projectRoot));
   const authenticode = normalizeAuthenticode(
     await signatureInspector(maker.setup.absolutePath),
+    maker.setup.sha256,
   );
+  const setupAfterAuthenticode = await inspectFile(
+    context.buildRoot,
+    maker.setup.absolutePath,
+    maker.setup.role,
+  );
+  if (!sameInspectedFile(maker.setup, setupAfterAuthenticode)) {
+    throw new ReleaseBundleError(
+      "FILE_CHANGED",
+      "The Windows installer changed during Authenticode inspection",
+    );
+  }
 
   const artifacts = [maker.setup, maker.fullPackage, maker.releases]
     .map(publicFileRecord)
@@ -161,7 +175,7 @@ async function renderReleaseBundle(context, signatureInspector, sourceInspector)
   artifacts[artifacts.findIndex((file) => file.role === "windows-setup")].authenticode =
     authenticode;
 
-  const evidence = await inspectEvidenceFiles(context);
+  const evidence = await inspectEvidenceFiles(context, maker);
   const checksumEntries = [...artifacts, ...evidence]
     .map(({ relativePath, sha256 }) => ({ relativePath, sha256 }))
     .sort(compareRelativePath);
@@ -277,8 +291,43 @@ async function inspectMakerOutput(context) {
     resolve(context.buildRoot, ...MAKER_RELATIVE_DIRECTORY.split("/")),
     "Squirrel maker output",
   );
-  const provenancePath = resolve(context.evidenceRoot, MAKER_EVIDENCE_NAME);
-  const provenance = await readJson(provenancePath, MAKER_EVIDENCE_NAME);
+  const inspectedProvenance = await inspectMakerProvenanceFile(context);
+  const provenance = inspectedProvenance.value;
+  validateMakerProvenance(provenance);
+  const expectedNames = [
+    provenance.makerOutput.setup.name,
+    provenance.makerOutput.fullPackage.name,
+    provenance.makerOutput.releases.name,
+  ];
+  await requireExactRegularFiles(makerRoot, expectedNames, "Squirrel maker output");
+  const setup = await verifiedMakerFile(
+    context,
+    makerRoot,
+    provenance.makerOutput.setup,
+    "windows-setup",
+  );
+  const fullPackage = await verifiedMakerFile(
+    context,
+    makerRoot,
+    provenance.makerOutput.fullPackage,
+    "squirrel-full-package",
+  );
+  const releases = await verifiedMakerFile(
+    context,
+    makerRoot,
+    provenance.makerOutput.releases,
+    "squirrel-releases-index",
+  );
+  return {
+    provenance,
+    provenanceFile: inspectedProvenance.record,
+    setup,
+    fullPackage,
+    releases,
+  };
+}
+
+function validateMakerProvenance(provenance) {
   if (
     provenance.schemaVersion !== 2 ||
     provenance.status !== "DRAFT — NOT FOR PUBLIC RELEASE" ||
@@ -303,26 +352,6 @@ async function inspectMakerOutput(context) {
       "Squirrel maker provenance contains an unsafe output name",
     );
   }
-  await requireExactRegularFiles(makerRoot, expectedNames, "Squirrel maker output");
-  const setup = await verifiedMakerFile(
-    context,
-    makerRoot,
-    provenance.makerOutput.setup,
-    "windows-setup",
-  );
-  const fullPackage = await verifiedMakerFile(
-    context,
-    makerRoot,
-    provenance.makerOutput.fullPackage,
-    "squirrel-full-package",
-  );
-  const releases = await verifiedMakerFile(
-    context,
-    makerRoot,
-    provenance.makerOutput.releases,
-    "squirrel-releases-index",
-  );
-  return { provenance, setup, fullPackage, releases };
 }
 
 async function verifiedMakerFile(context, makerRoot, expected, role) {
@@ -349,18 +378,26 @@ async function verifiedMakerFile(context, makerRoot, expected, role) {
   return file;
 }
 
-async function inspectEvidenceFiles(context) {
+async function inspectEvidenceFiles(context, maker) {
+  const keyStorageEvidencePath = resolve(
+    context.evidenceRoot,
+    KEY_STORAGE_EVIDENCE_NAME,
+  );
+  const confirmedProvenance = await inspectMakerProvenanceFile(
+    context,
+    maker.provenanceFile,
+  );
   const records = [
-    await inspectFile(
-      context.buildRoot,
-      resolve(context.evidenceRoot, MAKER_EVIDENCE_NAME),
-      "maker-provenance",
-    ),
+    confirmedProvenance.record,
     await inspectFile(
       context.buildRoot,
       context.sourceLockPath,
       "source-lockfile",
     ),
+    await inspectKeyStorageEvidenceFile({
+      buildRoot: context.buildRoot,
+      path: keyStorageEvidencePath,
+    }),
   ];
   const complianceRoot = resolve(
     context.buildRoot,
@@ -376,6 +413,154 @@ async function inspectEvidenceFiles(context) {
     ));
   }
   return records.map(publicFileRecord).sort(compareRelativePath);
+}
+
+async function inspectMakerProvenanceFile(context, expectedRecord) {
+  const path = resolve(context.evidenceRoot, MAKER_EVIDENCE_NAME);
+  const file = await openVerifiedBuildFile(
+    context.buildRoot,
+    path,
+    "maker-provenance",
+  );
+  try {
+    const size = safeFileSize(file.initial, MAKER_EVIDENCE_NAME);
+    if (size < 1 || size > MAX_JSON_BYTES) {
+      throw new ReleaseBundleError(
+        "FILE_INVALID",
+        `${MAKER_EVIDENCE_NAME} is not a bounded regular file`,
+      );
+    }
+    const bytes = await readExactHandleBytes(file.handle, size, true);
+    await assertHandleStable(file, MAKER_EVIDENCE_NAME);
+    const confirmedBytes = await readExactHandleBytes(file.handle, size, true);
+    await assertHandleStable(file, MAKER_EVIDENCE_NAME);
+    if (!bytes.equals(confirmedBytes)) {
+      throw new ReleaseBundleError(
+        "FILE_CHANGED",
+        `${MAKER_EVIDENCE_NAME} changed while it was read`,
+      );
+    }
+    const record = {
+      role: "maker-provenance",
+      relativePath: toPosix(relative(context.buildRoot, file.realPath)),
+      absolutePath: file.realPath,
+      size: confirmedBytes.byteLength,
+      sha256: sha256(confirmedBytes),
+    };
+    if (expectedRecord && !sameInspectedFile(expectedRecord, record)) {
+      throw new ReleaseBundleError(
+        "FILE_CHANGED",
+        `${MAKER_EVIDENCE_NAME} changed after maker validation`,
+      );
+    }
+    const value = parseJsonBytes(confirmedBytes, MAKER_EVIDENCE_NAME);
+    validateMakerProvenance(value);
+    return { value, record };
+  } finally {
+    await file.handle.close().catch(() => undefined);
+  }
+}
+
+export async function inspectKeyStorageEvidenceFile({
+  buildRoot,
+  path,
+  openFile = open,
+}) {
+  const file = await openVerifiedBuildFile(
+    buildRoot,
+    path,
+    "windows-key-storage-smoke",
+    openFile,
+  );
+  try {
+    const size = safeFileSize(file.initial, KEY_STORAGE_EVIDENCE_NAME);
+    if (size < 1 || size > MAX_JSON_BYTES) {
+      throw new ReleaseBundleError(
+        "FILE_INVALID",
+        `${KEY_STORAGE_EVIDENCE_NAME} is not a bounded regular file`,
+      );
+    }
+    const bytes = await readExactHandleBytes(file.handle, size, true);
+    await assertHandleStable(file, KEY_STORAGE_EVIDENCE_NAME);
+    const confirmedBytes = await readExactHandleBytes(file.handle, size, true);
+    await assertHandleStable(file, KEY_STORAGE_EVIDENCE_NAME);
+    if (!bytes.equals(confirmedBytes)) {
+      throw new ReleaseBundleError(
+        "FILE_CHANGED",
+        `${KEY_STORAGE_EVIDENCE_NAME} changed while it was read`,
+      );
+    }
+    const evidence = parseJsonBytes(confirmedBytes, KEY_STORAGE_EVIDENCE_NAME);
+    validateKeyStorageEvidence(evidence);
+    return {
+      role: "windows-key-storage-smoke",
+      relativePath: toPosix(relative(buildRoot, file.realPath)),
+      absolutePath: file.realPath,
+      size: confirmedBytes.byteLength,
+      sha256: sha256(confirmedBytes),
+    };
+  } finally {
+    await file.handle.close().catch(() => undefined);
+  }
+}
+
+function validateKeyStorageEvidence(evidence) {
+  if (
+    !hasExactKeys(evidence, [
+      "boundary",
+      "control",
+      "envelope",
+      "protector",
+      "result",
+      "runtime",
+      "schemaVersion",
+      "status",
+    ]) ||
+    evidence.schemaVersion !== 2 ||
+    evidence.status !== "DRAFT — NOT FOR PUBLIC RELEASE" ||
+    evidence.control !== "windows-safe-storage-key-envelope-spike" ||
+    evidence.result !== "PASS" ||
+    !isObject(evidence.runtime) ||
+    !hasExactKeys(evidence.runtime, ["architecture", "isPackaged", "platform"]) ||
+    evidence.runtime.platform !== "win32" ||
+    evidence.runtime.architecture !== "x64" ||
+    evidence.runtime.isPackaged !== true ||
+    !isObject(evidence.protector) ||
+    !hasExactKeys(evidence.protector, ["asyncAvailable", "providerId"]) ||
+    evidence.protector.providerId !== "electron-safe-storage" ||
+    evidence.protector.asyncAvailable !== true ||
+    !isObject(evidence.envelope) ||
+    !hasExactKeys(evidence.envelope, [
+      "keyBytes",
+      "persisted",
+      "knownPlaintextEncodingsAbsent",
+      "roundTripMatched",
+      "schemaVersion",
+      "shouldReEncrypt",
+    ]) ||
+    evidence.envelope.schemaVersion !== 1 ||
+    evidence.envelope.keyBytes !== 32 ||
+    evidence.envelope.persisted !== true ||
+    evidence.envelope.knownPlaintextEncodingsAbsent !== true ||
+    evidence.envelope.roundTripMatched !== true ||
+    typeof evidence.envelope.shouldReEncrypt !== "boolean" ||
+    !hasExactKeyStorageBoundary(evidence.boundary)
+  ) {
+    throw new ReleaseBundleError(
+      "KEY_STORAGE_EVIDENCE_INVALID",
+      "Packaged Windows key-storage evidence is invalid",
+    );
+  }
+}
+
+function parseJsonBytes(bytes, label) {
+  try {
+    const value = JSON.parse(bytes.toString("utf8"));
+    if (!isObject(value)) throw new TypeError("JSON root must be an object");
+    return value;
+  } catch (error) {
+    throw new ReleaseBundleError("JSON_INVALID", `${label} is invalid: ${error.message}`);
+  }
 }
 
 function publicReleaseBlockers(project, source, authenticode) {
@@ -432,16 +617,32 @@ export async function inspectAuthenticode(installerPath) {
   }
   const command = `
 $ErrorActionPreference = 'Stop'
-$signature = Get-AuthenticodeSignature -LiteralPath $env:OWNCONTEXT_SIGNATURE_TARGET
-$result = [pscustomobject]@{
-  status = [string]$signature.Status
-  statusMessage = [string]$signature.StatusMessage
-  signerSubject = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Subject }
-  signerThumbprint = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Thumbprint }
-  timestamperSubject = if ($null -eq $signature.TimeStamperCertificate) { $null } else { [string]$signature.TimeStamperCertificate.Subject }
-  timestamperThumbprint = if ($null -eq $signature.TimeStamperCertificate) { $null } else { [string]$signature.TimeStamperCertificate.Thumbprint }
+$stream = [System.IO.File]::Open(
+  $env:OWNCONTEXT_SIGNATURE_TARGET,
+  [System.IO.FileMode]::Open,
+  [System.IO.FileAccess]::Read,
+  [System.IO.FileShare]::Read
+)
+try {
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $inspectedSha256 = [Convert]::ToHexString($hasher.ComputeHash($stream)).ToLowerInvariant()
+  } finally {
+    $hasher.Dispose()
+  }
+  $signature = Get-AuthenticodeSignature -LiteralPath $env:OWNCONTEXT_SIGNATURE_TARGET
+  [pscustomobject]@{
+    status = [string]$signature.Status
+    statusMessage = [string]$signature.StatusMessage
+    inspectedSha256 = $inspectedSha256
+    signerSubject = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Subject }
+    signerThumbprint = if ($null -eq $signature.SignerCertificate) { $null } else { [string]$signature.SignerCertificate.Thumbprint }
+    timestamperSubject = if ($null -eq $signature.TimeStamperCertificate) { $null } else { [string]$signature.TimeStamperCertificate.Subject }
+    timestamperThumbprint = if ($null -eq $signature.TimeStamperCertificate) { $null } else { [string]$signature.TimeStamperCertificate.Thumbprint }
+  } | ConvertTo-Json -Compress
+} finally {
+  $stream.Dispose()
 }
-$result | ConvertTo-Json -Compress
 `;
   try {
     const { stdout } = await execFileAsync(
@@ -520,11 +721,22 @@ function normalizeRepositoryUrl(value) {
   }
 }
 
-function normalizeAuthenticode(value) {
-  if (!isObject(value) || typeof value.status !== "string") {
+function normalizeAuthenticode(value, expectedSha256) {
+  if (
+    !isObject(value) ||
+    typeof value.status !== "string" ||
+    !isSha256(value.inspectedSha256)
+  ) {
     throw new ReleaseBundleError(
       "AUTHENTICODE_RESULT_INVALID",
       "Authenticode inspection returned invalid evidence",
+    );
+  }
+  const inspectedSha256 = value.inspectedSha256.toLowerCase();
+  if (inspectedSha256 !== expectedSha256) {
+    throw new ReleaseBundleError(
+      "AUTHENTICODE_TARGET_MISMATCH",
+      "Authenticode inspection did not cover the verified installer bytes",
     );
   }
   const nullableText = (candidate) =>
@@ -535,6 +747,7 @@ function normalizeAuthenticode(value) {
   const timestamperThumbprint = nullableText(value.timestamperThumbprint);
   return {
     status: value.status,
+    inspectedSha256,
     valid: value.status === "Valid" && signerSubject !== null && signerThumbprint !== null,
     timestamped: timestamperSubject !== null && timestamperThumbprint !== null,
     signerSubject,
@@ -545,21 +758,156 @@ function normalizeAuthenticode(value) {
 }
 
 async function inspectFile(buildRoot, absolutePath, role) {
-  const realPath = await requireRegularFile(absolutePath, role);
+  const file = await openVerifiedBuildFile(buildRoot, absolutePath, role);
+  try {
+    const size = safeFileSize(file.initial, role);
+    const firstSha256 = await hashHandle(file.handle, size);
+    await assertHandleStable(file, role);
+    const sha256 = await hashHandle(file.handle, size);
+    await assertHandleStable(file, role);
+    if (sha256 !== firstSha256) {
+      throw new ReleaseBundleError("FILE_CHANGED", `${role} changed while it was hashed`);
+    }
+    return {
+      role,
+      relativePath: toPosix(relative(buildRoot, file.realPath)),
+      absolutePath: file.realPath,
+      size,
+      sha256,
+    };
+  } finally {
+    await file.handle.close().catch(() => undefined);
+  }
+}
+
+async function openVerifiedBuildFile(buildRoot, path, role, openFile = open) {
+  const before = await lstat(path).catch((error) => {
+    throw new ReleaseBundleError("FILE_MISSING", `${role} is unavailable: ${error.message}`);
+  });
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new ReleaseBundleError("FILE_INVALID", `${role} must be a regular file`);
+  }
+  const realPath = await realpath(path).catch(() => {
+    throw new ReleaseBundleError(
+      "FILE_CHANGED",
+      `${role} changed while its build boundary was being verified`,
+    );
+  });
   if (!isStrictDescendant(buildRoot, realPath)) {
     throw new ReleaseBundleError(
       "FILE_OUTSIDE_BUILD",
       `${role} must remain inside the Forge build root`,
     );
   }
-  const metadata = await lstat(realPath);
-  return {
-    role,
-    relativePath: toPosix(relative(buildRoot, realPath)),
-    absolutePath: realPath,
-    size: metadata.size,
-    sha256: await hashFile(realPath),
-  };
+  const resolved = await lstat(realPath, { bigint: true }).catch(() => {
+    throw new ReleaseBundleError(
+      "FILE_CHANGED",
+      `${role} changed while its build boundary was being verified`,
+    );
+  });
+  if (!resolved.isFile() || resolved.isSymbolicLink()) {
+    throw new ReleaseBundleError("FILE_INVALID", `${role} must be a regular file`);
+  }
+
+  const handle = await openFile(path, "r").catch(() => {
+    throw new ReleaseBundleError(
+      "FILE_CHANGED",
+      `${role} changed before it could be opened`,
+    );
+  });
+  try {
+    const initial = await handle.stat({ bigint: true }).catch(() => {
+      throw new ReleaseBundleError(
+        "FILE_CHANGED",
+        `${role} changed before it could be inspected`,
+      );
+    });
+    if (!initial.isFile() || !sameFileIdentity(initial, resolved)) {
+      throw new ReleaseBundleError(
+        "FILE_CHANGED",
+        `${role} changed while its build boundary was being verified`,
+      );
+    }
+    return { handle, initial, path, realPath };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function safeFileSize(metadata, role) {
+  if (metadata.size < 0n || metadata.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new ReleaseBundleError("FILE_INVALID", `${role} has an invalid size`);
+  }
+  return Number(metadata.size);
+}
+
+async function readExactHandleBytes(handle, size, rejectGrowth = false) {
+  const capacity = size + (rejectGrowth ? 1 : 0);
+  const bytes = Buffer.allocUnsafe(capacity);
+  let offset = 0;
+  while (offset < capacity) {
+    const result = await handle.read(bytes, offset, capacity - offset, offset);
+    if (result.bytesRead === 0) break;
+    offset += result.bytesRead;
+  }
+  if (offset !== size) {
+    throw new ReleaseBundleError("FILE_CHANGED", "File size changed while it was read");
+  }
+  return bytes.subarray(0, size);
+}
+
+async function hashHandle(handle, size) {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(size, 1)));
+  let position = 0;
+  while (position < size) {
+    const length = Math.min(buffer.byteLength, size - position);
+    const result = await handle.read(buffer, 0, length, position);
+    if (result.bytesRead === 0) {
+      throw new ReleaseBundleError("FILE_CHANGED", "File was truncated while it was hashed");
+    }
+    hash.update(buffer.subarray(0, result.bytesRead));
+    position += result.bytesRead;
+  }
+  return hash.digest("hex");
+}
+
+async function assertHandleStable(file, role) {
+  const final = await file.handle.stat({ bigint: true });
+  const current = await lstat(file.path, { bigint: true }).catch(() => null);
+  const currentRealPath = await realpath(file.path).catch(() => null);
+  if (
+    !sameFileState(file.initial, final) ||
+    !current ||
+    !current.isFile() ||
+    current.isSymbolicLink() ||
+    !sameFileIdentity(final, current) ||
+    currentRealPath !== file.realPath
+  ) {
+    throw new ReleaseBundleError("FILE_CHANGED", `${role} changed while it was inspected`);
+  }
+}
+
+function sameFileIdentity(handleMetadata, pathMetadata) {
+  return handleMetadata.dev === pathMetadata.dev &&
+    handleMetadata.ino === pathMetadata.ino;
+}
+
+function sameFileState(left, right) {
+  return left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs;
+}
+
+function sameInspectedFile(left, right) {
+  return left.role === right.role &&
+    left.relativePath === right.relativePath &&
+    left.absolutePath === right.absolutePath &&
+    left.size === right.size &&
+    left.sha256 === right.sha256;
 }
 
 function publicFileRecord(file) {
@@ -712,6 +1060,14 @@ function setsEqual(left, right) {
   if (left.size !== right.size) return false;
   for (const value of left) if (!right.has(value)) return false;
   return true;
+}
+
+function hasExactKeys(value, expectedKeys) {
+  if (!isObject(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...expectedKeys].sort();
+  return actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index]);
 }
 
 function isObject(value) {

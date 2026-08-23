@@ -54,8 +54,8 @@ const NUGET_CORE_PROPERTIES =
   /^package\/services\/metadata\/core-properties\/[0-9a-f]{32}\.psmdcp$/u;
 const PINNED_NUGET_METADATA = new Map([
   ["OwnContextDeveloperPreview.nuspec", {
-    length: 738,
-    sha256: "8b4241eb4680aa450cbddfafe2055b4e07351fdd79b6dd31dde89adfea625e5f",
+    length: 616,
+    sha256: "b04dac1774db65f09fa0d85ed42cf8406390a2b20a75253368294e9d1346db23",
   }],
   ["[Content_Types].xml", {
     length: 1_383,

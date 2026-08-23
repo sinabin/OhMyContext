@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -8,6 +9,7 @@ import {
   HASH_ID_PATTERN,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
   OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+  createNodeSqliteDevelopmentStorageProvider,
   deterministicId,
   fetchDocument,
   importDirectory,
@@ -41,7 +43,7 @@ async function fixture(): Promise<{ root: string; dbPath: string; vault: Vault }
   const documents = join(root, "documents");
   await mkdir(documents);
   const dbPath = join(root, "vault.sqlite");
-  const vault = openVault(dbPath);
+  const vault = openVault(dbPath, createNodeSqliteDevelopmentStorageProvider());
   openVaults.push(vault);
   return { root: documents, dbPath, vault };
 }
@@ -586,6 +588,34 @@ describe("vault ingestion and retrieval", () => {
     expect(listDeletionReceipts(vault)).toEqual([]);
   });
 
+  it("rejects a future schema before changing its database bytes or journal mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "owncontext-future-schema-"));
+    temporaryPaths.push(root);
+    const dbPath = join(root, "future.sqlite");
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      CREATE TABLE future_only(value TEXT) STRICT;
+      PRAGMA journal_mode = DELETE;
+      PRAGMA user_version = 99;
+    `);
+    setup.close();
+    const before = await readFile(dbPath);
+
+    expect(() => openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    )).toThrow("Vault schema version 99 is newer than supported version 2");
+
+    expect(await readFile(dbPath)).toEqual(before);
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const journal = inspection.prepare("PRAGMA journal_mode").get() as {
+      journal_mode: string;
+    };
+    inspection.close();
+    expect(journal.journal_mode).toBe("delete");
+  });
+
   it("persists FTS5 secure-delete through a version-one schema upgrade", async () => {
     const { dbPath, vault } = await fixture();
     vault.close();
@@ -598,7 +628,10 @@ describe("vault ingestion and retrieval", () => {
     `);
     downgrade.close();
 
-    const migrated = openVault(dbPath);
+    const migrated = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
     openVaults.push(migrated);
     const inspection = new DatabaseSync(dbPath, { readOnly: true });
     const version = inspection.prepare("PRAGMA user_version").get() as { user_version: number };
@@ -635,7 +668,10 @@ describe("vault ingestion and retrieval", () => {
       PRAGMA user_version = 1;
     `);
     downgrade.close();
-    const migrated = openVault(dbPath);
+    const migrated = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
     migrated.close();
     expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(false);
   });
@@ -649,7 +685,10 @@ describe("vault ingestion and retrieval", () => {
     openVaults.splice(openVaults.indexOf(vault), 1);
     expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(true);
 
-    const reopened = openVault(dbPath);
+    const reopened = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
     openVaults.push(reopened);
     const prepared = prepareSourcePurge(reopened, imported.sourceId);
     if (prepared.status !== "ready") throw new Error("Expected purge preview");
@@ -947,7 +986,10 @@ describe("vault ingestion and retrieval", () => {
     vault.close();
     openVaults.splice(openVaults.indexOf(vault), 1);
 
-    const reopened = openVault(dbPath);
+    const reopened = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
     openVaults.push(reopened);
     const fetched = fetchDocument(reopened, {
       documentId: imported.documents[0]?.documentId ?? "",

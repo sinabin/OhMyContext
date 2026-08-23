@@ -1,5 +1,18 @@
 export { HASH_ID_PATTERN, deterministicId } from "./ids.js";
 export {
+  createNodeSqliteDevelopmentStorageProvider,
+  validateVaultStorageProvider,
+} from "./storage.js";
+export type {
+  VaultStorageConnection,
+  VaultStorageDescriptor,
+  VaultStorageProvider,
+  VaultStorageRunResult,
+  VaultStorageSecurityProfile,
+  VaultStorageStatement,
+  VaultStorageValue,
+} from "./storage.js";
+export {
   fetchDocument,
   importDirectory,
   importOwnContextSampleLibrary,
