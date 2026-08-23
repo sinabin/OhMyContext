@@ -57,6 +57,7 @@ const connected: ConnectedServer[] = [];
 async function connectServer(
   overrides: Partial<VaultReadApi> = {},
   allowedCollection = "default",
+  clientKind: "codex" | "claude-code" = "codex",
 ) {
   const api: VaultReadApi = {
     searchVault: vi.fn(() => [searchResult]),
@@ -68,6 +69,7 @@ async function connectServer(
   const server = createOwnContextServer(vault, {
     api,
     allowedCollection,
+    clientKind,
     writeDiagnostic: (message) => diagnostics.push(message),
   });
   const client = new Client({ name: "owncontext-test", version: "0.0.0" });
@@ -170,7 +172,7 @@ describe("OwnContext MCP server", () => {
       query: "attributable",
       collection: "writing",
       limit: 5,
-    });
+    }, { clientKind: "codex" });
   });
 
   it("forces omitted collection searches into the connection grant", async () => {
@@ -186,7 +188,7 @@ describe("OwnContext MCP server", () => {
     expect(api.searchVault).toHaveBeenCalledWith(vault, {
       query: "attributable",
       collection: "private-notes",
-    });
+    }, { clientKind: "codex" });
   });
 
   it("denies a different collection without calling or diagnosing the vault", async () => {
@@ -249,7 +251,25 @@ describe("OwnContext MCP server", () => {
       before: 1,
       after: 2,
       maxChars: 8_000,
+    }, { clientKind: "codex" });
+  });
+
+  it("attributes calls to the trusted Claude Code launch identity", async () => {
+    const { api, client, vault } = await connectServer(
+      {},
+      "default",
+      "claude-code",
+    );
+    await client.callTool({
+      name: "search",
+      arguments: { query: "attributable" },
     });
+
+    expect(api.searchVault).toHaveBeenCalledWith(
+      vault,
+      { query: "attributable", collection: "default" },
+      { clientKind: "claude-code" },
+    );
   });
 
   it("denies a known ID until this server instance issues it through search", async () => {
@@ -450,6 +470,56 @@ describe("OwnContext MCP server", () => {
       "[owncontext-mcp] search failed (Error).\n",
     );
     expect(diagnostics.join("")).not.toContain("sensitive");
+  });
+
+  it("returns a content-free retry instruction when access history cannot be recorded", async () => {
+    const busySearch = await connectServer({
+      searchVault: vi.fn(() => {
+        throw Object.assign(
+          new Error("C:\\sensitive\\vault.sqlite3 is locked"),
+          { code: "EOWNCONTEXT_AUDIT_BUSY" },
+        );
+      }),
+    });
+    const search = requireCompletedToolResult(
+      await busySearch.client.callTool({
+        name: "search",
+        arguments: { query: "note" },
+      }),
+    );
+    expect(search.isError).toBe(true);
+    expect(requireTextContent(search.content[0])).toBe(
+      "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
+    );
+    expect(JSON.stringify(search)).not.toContain("sensitive");
+    expect(busySearch.diagnostics).toEqual([
+      "[owncontext-mcp] search failed (EOWNCONTEXT_AUDIT_BUSY).\n",
+    ]);
+
+    const busyFetch = await connectServer({
+      fetchDocument: vi.fn(() => {
+        throw Object.assign(new Error("busy"), {
+          code: "EOWNCONTEXT_AUDIT_BUSY",
+        });
+      }),
+    });
+    await busyFetch.client.callTool({
+      name: "search",
+      arguments: { query: "note" },
+    });
+    const fetch = requireCompletedToolResult(
+      await busyFetch.client.callTool({
+        name: "fetch",
+        arguments: { documentId: DOCUMENT_ID },
+      }),
+    );
+    expect(fetch.isError).toBe(true);
+    expect(requireTextContent(fetch.content[0])).toContain(
+      "No context was returned because local access history could not be recorded",
+    );
+    expect(busyFetch.diagnostics).toEqual([
+      "[owncontext-mcp] fetch failed (EOWNCONTEXT_AUDIT_BUSY).\n",
+    ]);
   });
 
   it("retains only allowlisted diagnostic categories and error codes", () => {

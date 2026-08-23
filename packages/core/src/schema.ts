@@ -1,6 +1,10 @@
 import type { VaultStorageConnection } from "./storage.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+
+/** Hard storage bound for physical retrieval-event rows, not UI entries. */
+export const MAX_RETRIEVAL_ACTIVITY_ROWS = 10_000;
+const LEGACY_RETRIEVAL_PRUNE_BATCH_ROWS = 1_000;
 
 export function assertSupportedSchemaVersion(version: number): void {
   if (!Number.isSafeInteger(version) || version < 0) {
@@ -18,7 +22,6 @@ export function initializeSchema(
   inspectedVersion: number,
 ): void {
   assertSupportedSchemaVersion(inspectedVersion);
-  let version = inspectedVersion;
 
   db.exec(`
     PRAGMA foreign_keys = ON;
@@ -27,25 +30,162 @@ export function initializeSchema(
     PRAGMA journal_mode = WAL;
   `);
 
-  if (version === 0) {
-    createVersionOne(db);
-    version = 1;
-  }
+  // A healthy current vault needs connection-local pragmas, but no write.
+  // Avoid taking BEGIN IMMEDIATE here: another process may legitimately hold
+  // the writer slot for a long import while a new read-oriented MCP process
+  // opens the same WAL database.
+  if (currentSchemaNeedsNoMaintenance(db)) return;
 
-  if (version === 1) {
-    migrateVersionOneToTwo(db);
-    version = 2;
-  }
+  // v1/v2 history had no physical cap. Securely deleting an unbounded legacy
+  // table in the final migration transaction can mirror the entire table into
+  // WAL and exhaust disk space. Trim oldest rows in restart-safe committed
+  // batches and truncate WAL between them while the old schema remains valid.
+  boundLegacyRetrievalRowsBeforeMigration(db);
 
-  if (version === 2) {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    // The read-only compatibility inspection happens before open and can become
+    // stale if two processes race an upgrade. Re-read only after taking the
+    // write lock so every migration decision is based on the live generation.
+    let version = liveSchemaVersion(db);
+    assertSupportedSchemaVersion(version);
+
+    if (version === 0) {
+      createVersionOne(db);
+      version = 1;
+    }
+
+    if (version === 1) {
+      migrateVersionOneToTwo(db);
+      version = 2;
+    }
+
+    if (version === 2) {
+      migrateVersionTwoToThree(db);
+      version = 3;
+    }
+
     ensureFtsSecureDelete(db);
+    pruneRetrievalActivityRows(db);
+    db.exec("COMMIT;");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // Preserve the migration error. SQLite may already have rolled back a
+      // transaction after a fatal statement failure.
+    }
+    throw error;
   }
+}
+
+function boundLegacyRetrievalRowsBeforeMigration(
+  db: VaultStorageConnection,
+): void {
+  while (true) {
+    const observedVersion = liveSchemaVersion(db);
+    assertSupportedSchemaVersion(observedVersion);
+    if (observedVersion !== 1 && observedVersion !== 2) return;
+
+    // A prior interrupted attempt may already have committed one bounded
+    // deletion batch. Never append another batch—or enter the final table
+    // replacement—until that WAL has actually been truncated. This makes
+    // repeated retries with the same pinned reader write-idempotent.
+    requireTruncatedWalCheckpoint(db);
+
+    db.exec("BEGIN IMMEDIATE;");
+    let deleted = 0;
+    try {
+      const version = liveSchemaVersion(db);
+      assertSupportedSchemaVersion(version);
+      if (version !== 1 && version !== 2) {
+        db.exec("COMMIT;");
+        return;
+      }
+
+      const cutoff = db.prepare(`
+        SELECT id
+        FROM retrieval_events
+        ORDER BY id DESC
+        LIMIT 1 OFFSET ?
+      `).get(MAX_RETRIEVAL_ACTIVITY_ROWS - 1) as {
+        id?: number | bigint;
+      } | undefined;
+      if (cutoff?.id === undefined) {
+        db.exec("COMMIT;");
+        return;
+      }
+
+      deleted = Number(db.prepare(`
+        DELETE FROM retrieval_events
+        WHERE id IN (
+          SELECT id
+          FROM retrieval_events
+          WHERE id < ?
+          ORDER BY id
+          LIMIT ?
+        )
+      `).run(cutoff.id, LEGACY_RETRIEVAL_PRUNE_BATCH_ROWS).changes);
+      db.exec("COMMIT;");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the pruning error if SQLite already ended the transaction.
+      }
+      throw error;
+    }
+
+    if (deleted === 0) return;
+  }
+}
+
+function requireTruncatedWalCheckpoint(db: VaultStorageConnection): void {
+  const result = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+    busy?: number | bigint;
+    log?: number | bigint;
+    checkpointed?: number | bigint;
+  } | undefined;
+  if (
+    Number(result?.busy ?? 1) !== 0 ||
+    Number(result?.log ?? 1) !== 0
+  ) {
+    throw new Error(
+      "Vault history migration paused because another reader prevented a bounded WAL checkpoint. Close other OwnContext clients and retry.",
+    );
+  }
+}
+
+function currentSchemaNeedsNoMaintenance(db: VaultStorageConnection): boolean {
+  if (liveSchemaVersion(db) !== SCHEMA_VERSION) return false;
+
+  const ftsConfig = db.prepare(`
+    SELECT v FROM chunks_fts_config WHERE k = 'secure-delete'
+  `).get() as { v?: number | bigint } | undefined;
+  if (Number(ftsConfig?.v ?? 0) !== 1) return false;
+
+  const excessRow = db.prepare(`
+    SELECT 1 AS present
+    FROM retrieval_events
+    ORDER BY id DESC
+    LIMIT 1 OFFSET ?
+  `).get(MAX_RETRIEVAL_ACTIVITY_ROWS);
+  return excessRow === undefined;
+}
+
+function liveSchemaVersion(db: VaultStorageConnection): number {
+  const row = db.prepare("PRAGMA user_version").get() as {
+    user_version?: number | bigint;
+  } | undefined;
+  const version = Number(row?.user_version);
+  if (!Number.isSafeInteger(version) || version < 0) {
+    throw new Error("Vault schema version is invalid.");
+  }
+  return version;
 }
 
 function createVersionOne(db: VaultStorageConnection): void {
   db.exec(`
-    BEGIN IMMEDIATE;
-
     CREATE TABLE sources (
       id TEXT PRIMARY KEY CHECK(length(id) = 64),
       kind TEXT NOT NULL CHECK(kind IN ('folder')),
@@ -143,14 +283,11 @@ function createVersionOne(db: VaultStorageConnection): void {
     CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
 
     PRAGMA user_version = 1;
-    COMMIT;
   `);
 }
 
 function migrateVersionOneToTwo(db: VaultStorageConnection): void {
   db.exec(`
-    BEGIN IMMEDIATE;
-
     CREATE TABLE deletion_receipts (
       id TEXT PRIMARY KEY CHECK(length(id) = 64),
       target_kind TEXT NOT NULL CHECK(target_kind = 'source'),
@@ -177,8 +314,119 @@ function migrateVersionOneToTwo(db: VaultStorageConnection): void {
     -- document that was logically deleted before FTS secure-delete existed.
     INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
     PRAGMA user_version = 2;
-    COMMIT;
   `);
+}
+
+function migrateVersionTwoToThree(db: VaultStorageConnection): void {
+  db.exec(`
+    CREATE TABLE retrieval_events_v3 (
+      id INTEGER PRIMARY KEY,
+      request_id TEXT NOT NULL CHECK(
+        length(request_id) = 64 AND
+        request_id NOT GLOB '*[^0-9a-f]*'
+      ),
+      client_kind TEXT NOT NULL CHECK(
+        client_kind IN ('legacy', 'desktop', 'codex', 'claude-code')
+      ),
+      event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+      document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+      chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+      result_count INTEGER NOT NULL CHECK(result_count >= 0),
+      created_at TEXT NOT NULL
+    ) STRICT;
+
+    INSERT INTO retrieval_events_v3(
+      id, request_id, client_kind, event_type, document_id,
+      chunk_id, result_count, created_at
+    )
+    WITH source_rows AS (
+      -- Bound the copy itself instead of copying an unbounded v2 table and
+      -- pruning afterward. This avoids temporarily duplicating the complete
+      -- legacy history inside the same database during upgrade.
+      SELECT *
+      FROM retrieval_events
+      ORDER BY id DESC
+      LIMIT ${MAX_RETRIEVAL_ACTIVITY_ROWS}
+    ),
+    partitioned AS (
+      SELECT
+        source_rows.*,
+        row_number() OVER (
+          PARTITION BY event_type, query_hash, result_count, created_at
+          ORDER BY id
+        ) AS family_ordinal
+      FROM source_rows
+    ),
+    segmented AS (
+      SELECT
+        partitioned.*,
+        id - family_ordinal AS contiguous_key
+      FROM partitioned
+    ),
+    numbered AS (
+      SELECT
+        segmented.*,
+        row_number() OVER (
+          PARTITION BY
+            event_type, query_hash, result_count, created_at, contiguous_key
+          ORDER BY id
+        ) AS segment_ordinal
+      FROM segmented
+    ),
+    batched AS (
+      SELECT
+        numbered.*,
+        CASE
+          WHEN event_type = 'search' AND result_count > 0
+            THEN CAST((segment_ordinal - 1) / result_count AS INTEGER)
+          ELSE segment_ordinal - 1
+        END AS batch_ordinal
+      FROM numbered
+    ),
+    anchored AS (
+      SELECT
+        batched.*,
+        min(id) OVER (
+          PARTITION BY
+            event_type, query_hash, result_count, created_at,
+            contiguous_key, batch_ordinal
+        ) AS request_anchor_id
+      FROM batched
+    )
+    SELECT
+      id,
+      printf('6c65676163790000%048x', request_anchor_id),
+      'legacy',
+      event_type,
+      document_id,
+      chunk_id,
+      result_count,
+      created_at
+    FROM anchored;
+
+    DROP TABLE retrieval_events;
+    ALTER TABLE retrieval_events_v3 RENAME TO retrieval_events;
+
+    CREATE INDEX retrieval_events_created_idx
+      ON retrieval_events(created_at DESC, id DESC);
+    CREATE INDEX retrieval_events_request_idx
+      ON retrieval_events(request_id, id);
+
+    PRAGMA user_version = 3;
+  `);
+}
+
+/** Keeps both migrated and newly written databases inside the physical row cap. */
+export function pruneRetrievalActivityRows(db: VaultStorageConnection): void {
+  db.prepare(`
+    DELETE FROM retrieval_events
+    WHERE id NOT IN (
+      SELECT id
+      FROM retrieval_events
+      ORDER BY id DESC
+      LIMIT ?
+    )
+  `).run(MAX_RETRIEVAL_ACTIVITY_ROWS);
 }
 
 function ensureFtsSecureDelete(db: VaultStorageConnection): void {
@@ -188,9 +436,7 @@ function ensureFtsSecureDelete(db: VaultStorageConnection): void {
   if (Number(row?.v ?? 0) === 1) return;
 
   db.exec(`
-    BEGIN IMMEDIATE;
     INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1);
     INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
-    COMMIT;
   `);
 }

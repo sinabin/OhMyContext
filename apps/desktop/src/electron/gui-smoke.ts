@@ -40,6 +40,9 @@ export interface GuiSmokeJourneyEvidence {
   readonly codexConnectionCardReady: true;
   readonly claudeCodeConnectionCardReady: true;
   readonly externalTransferBoundaryVisible: true;
+  readonly accessHistoryScreenReady: true;
+  readonly desktopHistoryEntryReady: true;
+  readonly contentFreeHistoryBoundaryVisible: true;
 }
 
 const GUI_JOURNEY_RENDERER_TIMEOUT_MS = 15_000;
@@ -170,6 +173,9 @@ function validateJourneyEvidence(value: unknown): GuiSmokeJourneyEvidence {
     evidence.codexConnectionCardReady !== true ||
     evidence.claudeCodeConnectionCardReady !== true ||
     evidence.externalTransferBoundaryVisible !== true ||
+    evidence.accessHistoryScreenReady !== true ||
+    evidence.desktopHistoryEntryReady !== true ||
+    evidence.contentFreeHistoryBoundaryVisible !== true ||
     !Number.isInteger(evidence.resultCardCount) ||
     (evidence.resultCardCount as number) < 1 ||
     (evidence.resultCardCount as number) > MAX_GUI_RESULT_CARDS
@@ -187,6 +193,9 @@ function validateJourneyEvidence(value: unknown): GuiSmokeJourneyEvidence {
     codexConnectionCardReady: true,
     claudeCodeConnectionCardReady: true,
     externalTransferBoundaryVisible: true,
+    accessHistoryScreenReady: true,
+    desktopHistoryEntryReady: true,
+    contentFreeHistoryBoundaryVisible: true,
   };
 }
 
@@ -290,6 +299,29 @@ function renderGuiJourneyScript(): string {
     return undefined;
   });
 
+  await waitFor('the access history navigation', () =>
+    buttonWithText('nav button', 'Access history')
+  ).then((button) => button.click());
+
+  const historyScreen = await waitFor('the content-free desktop access entry', () => {
+    const desktopEntry = document.querySelector('.history-entry .history-client.desktop');
+    const privacyNote = document.querySelector('.history-privacy-note');
+    const refreshButton = buttonWithText('button', 'Refresh history');
+    const boundary = document.querySelector('[aria-label="Current data boundary"]');
+    const privacyText = privacyNote instanceof HTMLElement ? privacyNote.innerText : '';
+    const boundaryText = boundary instanceof HTMLElement ? boundary.innerText : '';
+    if (
+      desktopEntry instanceof HTMLElement &&
+      refreshButton instanceof HTMLButtonElement &&
+      privacyText.includes('does not reveal your query') &&
+      privacyText.includes('does not live-update') &&
+      boundaryText.includes('Content-free local log')
+    ) {
+      return { desktopEntry, privacyNote, refreshButton };
+    }
+    return undefined;
+  });
+
   return {
     sampleSourceReady: true,
     sampleSourceLabel: expectedSourceLabel,
@@ -300,6 +332,9 @@ function renderGuiJourneyScript(): string {
     codexConnectionCardReady: connectionCards.codex instanceof HTMLElement,
     claudeCodeConnectionCardReady: connectionCards.claudeCode instanceof HTMLElement,
     externalTransferBoundaryVisible: true,
+    accessHistoryScreenReady: true,
+    desktopHistoryEntryReady: historyScreen.desktopEntry instanceof HTMLElement,
+    contentFreeHistoryBoundaryVisible: historyScreen.privacyNote instanceof HTMLElement,
   };
 })()
 `;

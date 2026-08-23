@@ -77,8 +77,11 @@ a Milestone 6 public-release gate.
 Status: in progress — the developer alpha, content-free folder preflight,
 built-in sample onboarding, source-removal flow, reversible Codex configuration,
 user-scoped Claude Code configuration, and an unsigned Windows x64 Squirrel
-developer-preview installer are implemented. The packaged GUI smoke now follows
-the built-in sample through search and the read-only AI Connections preview, and
+developer-preview installer are implemented. A bounded content-free Access
+history now distinguishes desktop, Codex, Claude Code, and migrated legacy
+requests, with explicit local-only deletion. The packaged GUI smoke now follows
+the built-in sample through search, the read-only AI Connections preview, and
+the desktop access-history entry, and
 a read-only Windows alpha workflow verifies a source-bound draft release bundle
 without creating a public release. A clean-machine Setup install/uninstall
 exercise, actual packaged client-connection mutation, non-developer usability
@@ -102,8 +105,16 @@ Deliverables:
   uninstaller environments remains release work. Claude Desktop Extension
   support remains planned.
 - A fixed `default` collection grant in each managed MCP launch, with other
-  collection requests denied. Collection choice, expiry, and access-history UI
-  remain planned.
+  collection requests denied. Collection choice and expiry remain planned.
+- A bounded, content-free Access history screen that displays request time, type,
+  managed client kind, and result count; old schema-v2 entries migrate to an
+  honest `legacy` kind, explicit refresh covers external-client writes, and
+  user-confirmed clearing affects only the local log. Client kind is a launch
+  declaration rather than authenticated identity. Retrieval fails closed with
+  no returned context when an import or concurrent writer prevents audit storage.
+  Excess legacy rows are securely pruned in restart-safe 1,000-row transactions
+  with bounded WAL checkpoints before v3 copying; a pinned reader pauses safely
+  and the next launch resumes after other clients close.
 - Privacy copy that distinguishes offline mode from cloud-AI excerpt transfer.
 - Two-step source removal with stale-confirmation protection and a persistent,
   content-free logical deletion receipt.

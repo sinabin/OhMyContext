@@ -100,6 +100,7 @@ describe("Claude Code OwnContext MCP configuration service", () => {
       args: launch.args,
       env: {
         OWNCONTEXT_ALLOWED_COLLECTION: "default",
+        OWNCONTEXT_CLIENT_KIND: "claude-code",
         OWNCONTEXT_MANAGED_BY: CLAUDE_CODE_MANAGED_MARKER,
         OWNCONTEXT_VAULT_PATH: launch.vaultPath,
         ELECTRON_RUN_AS_NODE: "1",
@@ -531,6 +532,53 @@ describe("Claude Code OwnContext MCP configuration service", () => {
       code: "unchanged",
       changed: false,
       backupCreated: false,
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("recognizes a pre-client-label managed entry as stale and refreshes it locally", async () => {
+    const legacy = structuredClone(renderClaudeCodeMcpConfig(launch)) as {
+      env: Record<string, string>;
+    };
+    delete legacy.env.OWNCONTEXT_CLIENT_KIND;
+    await writeJson(configPath, {
+      theme: "keep-me",
+      mcpServers: { owncontext: legacy },
+    });
+    const service = createService(configPath, createFakeRunner(configPath, requests));
+
+    expect(await service.preview(launch)).toMatchObject({
+      status: "managed_stale",
+      canApply: true,
+      canRemove: true,
+    });
+    await expect(service.apply(launch)).resolves.toMatchObject({
+      ok: true,
+      code: "applied",
+      changed: true,
+      backupCreated: true,
+    });
+    expect(await readJson(configPath)).toEqual({
+      theme: "keep-me",
+      mcpServers: { owncontext: renderClaudeCodeMcpConfig(launch) },
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("refuses a managed-looking entry that declares a different client", async () => {
+    const conflicting = structuredClone(renderClaudeCodeMcpConfig(launch)) as {
+      env: Record<string, string>;
+    };
+    conflicting.env.OWNCONTEXT_CLIENT_KIND = "codex";
+    await writeJson(configPath, {
+      mcpServers: { owncontext: conflicting },
+    });
+    const service = createService(configPath, createFakeRunner(configPath, requests));
+
+    expect(await service.preview(launch)).toMatchObject({
+      status: "unmanaged_conflict",
+      canApply: false,
+      canRemove: false,
     });
     expect(requests).toHaveLength(0);
   });

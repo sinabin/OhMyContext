@@ -263,6 +263,78 @@ h2 { margin: 0; font-size: 22px; font-weight: 650; }
   border-radius: 10px;
 }
 
+.access-history { max-width: 1050px; }
+.history-heading .secondary { flex: 0 0 auto; }
+.history-actions { display: flex; flex: 0 0 auto; gap: 9px; }
+.history-boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 25px;
+}
+.history-boundary-grid article {
+  padding: 18px;
+  background: #fffefa;
+  border: 1px solid #d8d8cf;
+  border-radius: 12px;
+}
+.history-boundary-grid strong { display: block; margin-top: 10px; }
+.history-boundary-grid p { margin: 7px 0 0; color: #586962; font-size: 12px; line-height: 1.5; }
+.history-kind {
+  display: inline-block;
+  padding: 4px 7px;
+  color: #2b5d4e;
+  background: #e1eee6;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.history-kind.external { color: #75521f; background: #fbefcf; }
+.history-kind.legacy { color: #66716c; background: #ecece7; }
+.history-privacy-note {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 22px;
+  padding: 17px 19px;
+  margin-top: 16px;
+  color: #3c5149;
+  background: #e4ead8;
+  border: 1px solid #d2d9c8;
+  border-radius: 11px;
+}
+.history-privacy-note p { margin: 0; font-size: 12px; line-height: 1.55; }
+.history-notice { margin: 18px 0 0; }
+.history-list { display: grid; gap: 10px; margin-top: 13px; }
+.history-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 17px 19px;
+  background: #fffefa;
+  border: 1px solid #d8d8cf;
+  border-radius: 11px;
+}
+.history-entry-main { min-width: 0; }
+.history-entry-main strong { margin-left: 9px; font-size: 13px; }
+.history-entry-main p { margin: 7px 0 0; color: #5c6c66; font-size: 12px; line-height: 1.45; }
+.history-client {
+  display: inline-block;
+  padding: 4px 7px;
+  color: #275a4b;
+  background: #e1eee6;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 750;
+}
+.history-client.codex, .history-client.claude-code { color: #75521f; background: #fbefcf; }
+.history-client.legacy { color: #66716c; background: #ecece7; }
+.history-entry-meta { flex: 0 0 auto; color: #74817b; text-align: right; font-size: 10px; }
+.history-entry-meta time, .history-entry-meta span { display: block; }
+.history-entry-meta span { margin-top: 6px; }
+.history-empty { margin-top: 13px; }
+
 .connections { max-width: 1050px; }
 .connection-card { margin-top: 25px; padding: 26px; background: #fffefa; border: 1px solid #d8d8cf; border-radius: 15px; }
 .connection-summary { display: flex; gap: 16px; align-items: flex-start; }
@@ -301,4 +373,7 @@ h2 { margin: 0; font-size: 22px; font-weight: 650; }
   .setup-bridge { align-items: stretch; flex-direction: column; }
   .setup-bridge .secondary { align-self: flex-start; }
   .preflight-stats { grid-template-columns: repeat(2, 1fr); }
+  .history-boundary-grid { grid-template-columns: 1fr; }
+  .history-privacy-note { grid-template-columns: 1fr; gap: 7px; }
+  .history-actions { align-items: stretch; flex-direction: column; }
 }

@@ -19,6 +19,7 @@ describe("renderer-safe connection previews", () => {
     renderRendererSafeClaudeCodePreview(launch),
   ])("shows the grant without disclosing private local paths", (preview) => {
     expect(preview).toContain("default");
+    expect(preview).toMatch(/OWNCONTEXT_CLIENT_KIND/);
     expect(preview).toContain("private local OwnContext vault");
     expect(preview).not.toContain("private-user");
     expect(preview).not.toContain(launch.commandPath);
@@ -29,7 +30,10 @@ describe("renderer-safe connection previews", () => {
   it("keeps the Claude display preview valid JSON", () => {
     expect(JSON.parse(renderRendererSafeClaudeCodePreview(launch))).toMatchObject({
       type: "stdio",
-      env: { OWNCONTEXT_ALLOWED_COLLECTION: "default" },
+      env: {
+        OWNCONTEXT_ALLOWED_COLLECTION: "default",
+        OWNCONTEXT_CLIENT_KIND: "claude-code",
+      },
     });
   });
 

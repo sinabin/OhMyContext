@@ -32,6 +32,9 @@ describe("packaged GUI first-run smoke contract", () => {
         codexConnectionCardReady: true,
         claudeCodeConnectionCardReady: true,
         externalTransferBoundaryVisible: true,
+        accessHistoryScreenReady: true,
+        desktopHistoryEntryReady: true,
+        contentFreeHistoryBoundaryVisible: true,
       })),
     };
     const executeJavaScript = vi.mocked(renderer.executeJavaScript);
@@ -48,6 +51,9 @@ describe("packaged GUI first-run smoke contract", () => {
       codexConnectionCardReady: true,
       claudeCodeConnectionCardReady: true,
       externalTransferBoundaryVisible: true,
+      accessHistoryScreenReady: true,
+      desktopHistoryEntryReady: true,
+      contentFreeHistoryBoundaryVisible: true,
     });
     expect(executeJavaScript).toHaveBeenCalledTimes(1);
     expect(executeJavaScript.mock.calls[0]?.[1]).toBe(true);
@@ -60,6 +66,11 @@ describe("packaged GUI first-run smoke contract", () => {
     expect(script).toContain('[aria-label="Codex connection"]');
     expect(script).toContain('[aria-label="Claude Code connection"]');
     expect(script).toContain("returned context may leave");
+    expect(script).toContain("Access history");
+    expect(script).toContain(".history-client.desktop");
+    expect(script).toContain("Content-free local log");
+    expect(script).toContain("Refresh history");
+    expect(script).toContain("does not live-update");
   });
 
   it.each([
@@ -75,6 +86,9 @@ describe("packaged GUI first-run smoke contract", () => {
       codexConnectionCardReady: true,
       claudeCodeConnectionCardReady: true,
       externalTransferBoundaryVisible: true,
+      accessHistoryScreenReady: true,
+      desktopHistoryEntryReady: true,
+      contentFreeHistoryBoundaryVisible: true,
     },
     {
       sampleSourceReady: true,
@@ -86,6 +100,9 @@ describe("packaged GUI first-run smoke contract", () => {
       codexConnectionCardReady: true,
       claudeCodeConnectionCardReady: true,
       externalTransferBoundaryVisible: true,
+      accessHistoryScreenReady: true,
+      desktopHistoryEntryReady: true,
+      contentFreeHistoryBoundaryVisible: true,
     },
   ])("rejects invalid or unbounded renderer evidence: %o", async (value) => {
     const renderer: GuiSmokeRenderer = {
@@ -119,6 +136,9 @@ describe("packaged GUI first-run smoke contract", () => {
       codexConnectionCardReady: true,
       claudeCodeConnectionCardReady: true,
       externalTransferBoundaryVisible: true,
+      accessHistoryScreenReady: true,
+      desktopHistoryEntryReady: true,
+      contentFreeHistoryBoundaryVisible: true,
     });
 
     const result = JSON.parse(await readFile(context!.resultPath, "utf8"));
@@ -135,6 +155,9 @@ describe("packaged GUI first-run smoke contract", () => {
       codexConnectionCardReady: true,
       claudeCodeConnectionCardReady: true,
       externalTransferBoundaryVisible: true,
+      accessHistoryScreenReady: true,
+      desktopHistoryEntryReady: true,
+      contentFreeHistoryBoundaryVisible: true,
     });
   });
 });

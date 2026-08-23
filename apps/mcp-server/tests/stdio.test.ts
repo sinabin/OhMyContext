@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
@@ -91,6 +92,7 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
       const {
         createNodeSqliteDevelopmentStorageProvider,
         importDirectory,
+        listRetrievalActivity,
         openVault,
       } = await import("@owncontext/core");
       await mkdir(sourceDirectory);
@@ -125,6 +127,7 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
           NODE_NO_WARNINGS: "1",
           OWNCONTEXT_VAULT_PATH: vaultPath,
           OWNCONTEXT_ALLOWED_COLLECTION: "default",
+          OWNCONTEXT_CLIENT_KIND: "codex",
         },
         stderr: "pipe",
       });
@@ -194,9 +197,63 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
             chunks: [{ contentTrust: "untrusted-user-data" }],
           },
         });
+
+        const competingWriter = new DatabaseSync(vaultPath);
+        competingWriter.exec("BEGIN IMMEDIATE");
+        try {
+          const busySearch = requireCompletedToolResult(
+            await client.callTool({
+              name: "search",
+              arguments: { query: "orchard meeting" },
+            }),
+          );
+          expect(busySearch.isError).toBe(true);
+          expect(JSON.stringify(busySearch)).toContain(
+            "No context was returned because local access history could not be recorded",
+          );
+          expect(JSON.stringify(busySearch)).toContain("Retry after that operation finishes");
+          expect(JSON.stringify(busySearch)).not.toContain("orchard meeting");
+        } finally {
+          competingWriter.exec("ROLLBACK");
+          competingWriter.close();
+        }
         expect(stderr.join("")).not.toContain("startup failed");
+        expect(stderr.join("")).toContain("EOWNCONTEXT_AUDIT_BUSY");
       } finally {
         await client.close();
+      }
+
+      const reopenedVault = openVault(
+        vaultPath,
+        createNodeSqliteDevelopmentStorageProvider(),
+      );
+      try {
+        const activity = listRetrievalActivity(reopenedVault);
+        expect(activity).toHaveLength(3);
+        expect(activity.map((entry) => entry.clientKind)).toEqual([
+          "codex",
+          "codex",
+          "codex",
+        ]);
+        expect(activity.map((entry) => entry.eventType)).toEqual([
+          "fetch",
+          "search",
+          "search",
+        ]);
+        for (const entry of activity) {
+          expect(Object.keys(entry).sort()).toEqual([
+            "clientKind",
+            "eventType",
+            "occurredAt",
+            "requestId",
+            "resultCount",
+          ]);
+        }
+        expect(JSON.stringify(activity)).not.toMatch(
+          /orchard|crosscollectioncanary|Friday morning|memory\.md/u,
+        );
+      } finally {
+        reopenedVault.close();
       }
     },
     20_000,

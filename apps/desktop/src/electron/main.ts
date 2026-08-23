@@ -11,11 +11,13 @@ import {
 } from "electron";
 import {
   createNodeSqliteDevelopmentStorageProvider,
+  clearRetrievalActivity,
   commitPreparedDirectoryImport,
   DirectoryImportScopeChangedError,
   fetchDocument,
   importOwnContextSampleLibrary,
   listDeletionReceipts,
+  listRetrievalActivity,
   listSources,
   openVault,
   prepareDirectoryImport,
@@ -441,16 +443,52 @@ function startDesktopApp(
 
     ipcMain.handle("vault:search", (event, query: string) => {
       trustedWindowFor(event);
-      return { results: searchVault(requireVault(), { query, limit: 12 }) };
+      return {
+        results: searchVault(
+          requireVault(),
+          { query, limit: 12 },
+          { clientKind: "desktop" },
+        ),
+      };
     });
 
     ipcMain.handle(
       "vault:fetch",
       (event, input: { documentId: string; chunkId: string }) => {
         trustedWindowFor(event);
-        return fetchDocument(requireVault(), input);
+        return fetchDocument(requireVault(), input, { clientKind: "desktop" });
       },
     );
+
+    ipcMain.handle("vault:list-retrieval-activity", (event) => {
+      trustedWindowFor(event);
+      return {
+        entries: listRetrievalActivity(requireVault(), { limit: 100 }),
+      };
+    });
+
+    ipcMain.handle("vault:clear-retrieval-activity", async (event) => {
+      const parentWindow = trustedWindowFor(event);
+      const confirmation = await dialog.showMessageBox(parentWindow, {
+        type: "warning",
+        title: "Clear local access history?",
+        message: "Clear OwnContext's local access history?",
+        detail:
+          "This removes only the content-free history stored in this local vault. " +
+          "It cannot retract context already returned to an AI client or retained by its provider.",
+        buttons: ["Keep history", "Clear local history"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      if (confirmation.response !== 1) {
+        return { status: "canceled" as const };
+      }
+      return {
+        status: "cleared" as const,
+        deleted: clearRetrievalActivity(requireVault()),
+      };
+    });
 
     ipcMain.handle("vault:list-sources", (event) => {
       trustedWindowFor(event);

@@ -285,12 +285,50 @@ snapshot semantics are a later milestone.
 
 Application-level vault and configuration-backup encryption, safe backup
 retention, authenticated client-executable discovery, signed installers and
-updates, parser process isolation, access-history UI, and signed Claude Desktop
+updates, parser process isolation, release validation of per-client access
+history, and signed Claude Desktop
 Extension (`.dxt`) packaging remain release gates. Claude Desktop support is
 planned, not an implemented connection in this alpha. Use non-sensitive fixture
 data only. A cloud AI client can send retrieved excerpts to its configured model
 provider even though storage and retrieval run locally. Returned provenance
 metadata can also include titles, source paths, timestamps, and stable IDs.
+
+The implemented Access history screen exposes only request time, request type,
+managed client kind, and result count. Schema v3 stores no query or query hash,
+document content, snippet, title, or path. The internal table retains opaque
+document/chunk linkage IDs so source removal can also remove linked audit rows;
+those IDs are not exposed through the renderer API. Older schema-v2 records are
+labeled `legacy` instead of having a client guessed. Intact multi-result search
+rows are reconstructed as one request; a legacy request may remain split if an
+earlier source purge removed rows needed to prove the grouping. Clearing this local history cannot
+retract context that an AI client or provider already received, and the client
+label is managed-launch metadata rather than cryptographic provider attestation.
+External-client activity does not live-update an already open screen, so the UI
+provides an explicit refresh control and says so at the point of use.
+
+Retrieval fails closed while the same vault is importing or whenever another
+writer prevents the access-history insert. In that case no search or fetch
+result is returned to the caller, and the error asks the client to retry after
+the import or removal finishes. This preserves the rule that externally
+returnable context must not bypass its local audit entry; seamless concurrent
+retrieval remains future usability work.
+
+Schema v3 intentionally does not make a still-running schema-v2 MCP process
+write-compatible. After the desktop migrates the vault, an older process fails
+its next audit insert without corrupting the v3 vault; restarting the AI client
+loads the current managed launch. This fail-closed cutover is covered by a core
+regression test, but seamless active-session upgrade remains a public-release
+usability gate.
+
+Before that upgrade copies history, excess v1/v2 rows are securely removed in
+restart-safe 1,000-row transactions with a truncating WAL checkpoint between
+batches. A reader that prevents a bounded checkpoint pauses the migration with
+an instruction to close other OwnContext clients and retry; the committed old
+schema remains valid and the next launch resumes. A 100,000-row regression
+fixture verifies that only the newest 10,000 physical rows survive and that WAL
+peak growth stays bounded. This protects temporary free space but deliberately
+does not run `VACUUM`, so it does not promise to shrink an already allocated
+main database file.
 
 The current core requires callers to select the visibly labeled plaintext
 development storage provider; there is no implicit storage fallback. A separate
@@ -302,5 +340,7 @@ remain plaintext and the UI continues to report encryption as not implemented.
 The compatibility probe reads the main header and only applies checksum-valid
 WAL frames when both database mode bytes declare WAL. It does not open SQLite or
 create a plaintext copy, caps inspected WAL input at 256 MiB, and fails closed
-on a mismatched WAL sidecar or rollback-journal recovery. Its check and the real
-open are not atomic against a concurrent external writer.
+on a mismatched WAL sidecar or rollback-journal recovery. A stable zero-byte WAL
+created by a live reader is accepted as containing no frames so a bounded
+migration can produce its explicit close-clients-and-retry result. Its check and
+the real open are not atomic against a concurrent external writer.

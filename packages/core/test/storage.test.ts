@@ -124,7 +124,7 @@ describe("vault storage provider boundary", () => {
     };
 
     expect(() => openVault(join(databaseDirectory, "vault.sqlite"), provider)).toThrow(
-      "Vault schema version 99 is newer than supported version 2",
+      "Vault schema version 99 is newer than supported version 3",
     );
     expect(opened).toBe(false);
     expect(existsSync(databaseDirectory)).toBe(false);

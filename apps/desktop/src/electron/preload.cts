@@ -23,6 +23,10 @@ const api = {
   search: (query: string) => ipcRenderer.invoke("vault:search", query) as Promise<SearchResponse>,
   fetch: (documentId: string, chunkId: string) =>
     ipcRenderer.invoke("vault:fetch", { documentId, chunkId }) as Promise<FetchResponse | null>,
+  listRetrievalActivity: () =>
+    ipcRenderer.invoke("vault:list-retrieval-activity") as Promise<RetrievalActivityResponse>,
+  clearRetrievalActivity: () =>
+    ipcRenderer.invoke("vault:clear-retrieval-activity") as Promise<ClearRetrievalActivityResponse>,
   listSources: () => ipcRenderer.invoke("vault:list-sources") as Promise<SourcesResponse>,
   prepareSourcePurge: (sourceId: string) =>
     ipcRenderer.invoke("vault:prepare-source-purge", sourceId) as Promise<PrepareSourcePurgeResponse>,
@@ -159,6 +163,22 @@ export interface FetchResponse {
   modifiedAt: string;
 }
 
+export interface RetrievalActivityEntry {
+  requestId: string;
+  occurredAt: string;
+  eventType: "search" | "fetch";
+  clientKind: "desktop" | "codex" | "claude-code" | "legacy";
+  resultCount: number;
+}
+
+export interface RetrievalActivityResponse {
+  entries: RetrievalActivityEntry[];
+}
+
+export type ClearRetrievalActivityResponse =
+  | { status: "cleared"; deleted: number }
+  | { status: "canceled" };
+
 export interface VaultSource {
   sourceId: string;
   name: string;
@@ -234,6 +254,7 @@ export interface CodexConnectionPreview {
   status:
     | "absent"
     | "managed"
+    | "managed_stale"
     | "unmanaged_conflict"
     | "malformed_managed_block"
     | "config_too_large"

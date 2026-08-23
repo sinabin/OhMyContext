@@ -10,7 +10,7 @@ import { mkdirSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chunkDocument, normalizeText, titleFromText } from "./chunking.js";
-import { assertHashId, contentHash, deterministicId } from "./ids.js";
+import { HASH_ID_PATTERN, assertHashId, contentHash, deterministicId } from "./ids.js";
 import {
   OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
@@ -18,7 +18,11 @@ import {
   OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL,
   verifyOwnContextSampleLibraryDirectory,
 } from "./sample.js";
-import { assertSupportedSchemaVersion, initializeSchema } from "./schema.js";
+import {
+  assertSupportedSchemaVersion,
+  initializeSchema,
+  pruneRetrievalActivityRows,
+} from "./schema.js";
 import {
   snapshotVaultStorageDescriptor,
   validateVaultStorageProvider,
@@ -44,6 +48,12 @@ import type {
   PrepareSourcePurgeResult,
   PurgeSourceInput,
   PurgeSourceResult,
+  ListRetrievalActivityOptions,
+  RetrievalActivityClientKind,
+  RetrievalActivityEntry,
+  RetrievalActivityEventType,
+  RetrievalAuditContext,
+  RetrievalClientKind,
   SearchVaultInput,
   SourcePurgePreview,
   Vault,
@@ -59,6 +69,10 @@ const DEFAULT_MAX_ENTRIES = 100_000;
 const DEFAULT_CHUNK_SIZE = 1_400;
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 50;
+const DEFAULT_RETRIEVAL_ACTIVITY_LIMIT = 50;
+const RETRIEVAL_AUDIT_BUSY_MESSAGE =
+  "Another vault write is active. No context was returned because OwnContext could not record this access; retry after the import or removal finishes.";
+export const MAX_RETRIEVAL_ACTIVITY_RESULTS = 100;
 const MAX_SCOPED_RANK_TERMS = 16;
 const DEFAULT_NEIGHBORS = 1;
 const MAX_NEIGHBORS = 5;
@@ -182,6 +196,14 @@ interface FetchRow {
   modified_at: string;
 }
 
+interface RetrievalActivityRow {
+  request_id: string;
+  event_type: RetrievalActivityEventType;
+  client_kind: RetrievalActivityClientKind;
+  result_count: number | bigint;
+  created_at: string;
+}
+
 interface SourceRow {
   id: string;
   display_name: string;
@@ -255,6 +277,15 @@ export class DirectoryImportScopeChangedError extends Error {
   public constructor() {
     super("The selected folder changed after its import preview. Scan it again.");
     this.name = "DirectoryImportScopeChangedError";
+  }
+}
+
+export class RetrievalAuditUnavailableError extends Error {
+  public readonly code = "EOWNCONTEXT_AUDIT_BUSY" as const;
+
+  public constructor(cause?: unknown) {
+    super(RETRIEVAL_AUDIT_BUSY_MESSAGE, { cause });
+    this.name = "RetrievalAuditUnavailableError";
   }
 }
 
@@ -1372,8 +1403,56 @@ export function verifyDeletionReceipt(
   return { status: "verified", receipt };
 }
 
-export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchResult[] {
+/** Returns newest retrieval requests without exposing content or provenance. */
+export function listRetrievalActivity(
+  vault: Vault,
+  options: ListRetrievalActivityOptions = {},
+): RetrievalActivityEntry[] {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("retrieval activity options must be an object");
+  }
+  const limit = boundedInteger(
+    options.limit ?? DEFAULT_RETRIEVAL_ACTIVITY_LIMIT,
+    "limit",
+    1,
+    MAX_RETRIEVAL_ACTIVITY_RESULTS,
+  );
+  const rows = databaseFor(vault).prepare(`
+    SELECT
+      request_id,
+      event_type,
+      client_kind,
+      result_count,
+      created_at
+    FROM retrieval_events
+    GROUP BY request_id, event_type, client_kind, result_count, created_at
+    ORDER BY max(id) DESC
+    LIMIT ?
+  `).all(limit) as unknown as RetrievalActivityRow[];
+
+  return rows.map(retrievalActivityEntryFromRow);
+}
+
+/** Clears all local retrieval history and returns the number of request entries removed. */
+export function clearRetrievalActivity(vault: Vault): number {
   const db = databaseFor(vault);
+  return transactionImmediate(db, () => {
+    const entryCount = countRows(
+      db,
+      "SELECT count(DISTINCT request_id) AS count FROM retrieval_events",
+    );
+    db.prepare("DELETE FROM retrieval_events").run();
+    return entryCount;
+  });
+}
+
+export function searchVault(
+  vault: Vault,
+  input: SearchVaultInput,
+  context?: RetrievalAuditContext,
+): VaultSearchResult[] {
+  const db = databaseFor(vault);
+  const clientKind = retrievalClientKind(context);
   if (!input || typeof input.query !== "string") {
     throw new TypeError("query must be a string");
   }
@@ -1420,6 +1499,8 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
     ? `0.0 - (${scopedScoreParts.join(" + ")})`
     : "bm25(chunks_fts, 0.0, 0.0, 0.0, 0.3, 0.1, 1.0)";
 
+  assertRetrievalAuditAvailable(vault);
+
   let rows: SearchRow[];
   try {
     rows = db.prepare(`
@@ -1446,20 +1527,29 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
   }
 
   const createdAt = new Date().toISOString();
-  transaction(db, () => {
+  retrievalAuditTransaction(vault, () => {
+    const requestId = retrievalRequestId(db);
     const insertEvent = db.prepare(`
       INSERT INTO retrieval_events(
-        event_type, query_hash, document_id, chunk_id, result_count, created_at
-      ) VALUES ('search', ?, ?, ?, ?, ?)
+        request_id, client_kind, event_type, document_id, chunk_id,
+        result_count, created_at
+      ) VALUES (?, ?, 'search', ?, ?, ?, ?)
     `);
-    const queryHash = deterministicId("retrieval-query", query);
     if (rows.length === 0) {
-      insertEvent.run(queryHash, null, null, 0, createdAt);
+      insertEvent.run(requestId, clientKind, null, null, 0, createdAt);
     } else {
       for (const row of rows) {
-        insertEvent.run(queryHash, row.document_id, row.chunk_id, rows.length, createdAt);
+        insertEvent.run(
+          requestId,
+          clientKind,
+          row.document_id,
+          row.chunk_id,
+          rows.length,
+          createdAt,
+        );
       }
     }
+    pruneRetrievalActivityRows(db);
   });
 
   return rows.map((row) => ({
@@ -1477,8 +1567,10 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
 export function fetchDocument(
   vault: Vault,
   input: FetchDocumentInput,
+  context?: RetrievalAuditContext,
 ): VaultFetchResult | null {
   const db = databaseFor(vault);
+  const clientKind = retrievalClientKind(context);
   if (!input || typeof input.documentId !== "string") {
     throw new TypeError("documentId is required");
   }
@@ -1492,6 +1584,8 @@ export function fetchDocument(
     1,
     MAX_FETCH_CHARS,
   );
+
+  assertRetrievalAuditAvailable(vault);
 
   const allRows = db.prepare(`
     SELECT
@@ -1538,11 +1632,21 @@ export function fetchDocument(
     chunks: bounded,
   };
 
-  db.prepare(`
-    INSERT INTO retrieval_events(
-      event_type, query_hash, document_id, chunk_id, result_count, created_at
-    ) VALUES ('fetch', NULL, ?, ?, 1, ?)
-  `).run(result.documentId, result.chunkId, new Date().toISOString());
+  retrievalAuditTransaction(vault, () => {
+    db.prepare(`
+      INSERT INTO retrieval_events(
+        request_id, client_kind, event_type, document_id, chunk_id,
+        result_count, created_at
+      ) VALUES (?, ?, 'fetch', ?, ?, 1, ?)
+    `).run(
+      retrievalRequestId(db),
+      clientKind,
+      result.documentId,
+      result.chunkId,
+      new Date().toISOString(),
+    );
+    pruneRetrievalActivityRows(db);
+  });
   return result;
 }
 
@@ -1787,6 +1891,68 @@ function stateFor(vault: Vault): VaultState {
 
 function databaseFor(vault: Vault): VaultStorageConnection {
   return stateFor(vault).db;
+}
+
+function retrievalClientKind(
+  context: RetrievalAuditContext | undefined,
+): RetrievalClientKind {
+  if (context === undefined) return "desktop";
+  if (!context || typeof context !== "object" || Array.isArray(context)) {
+    throw new TypeError("retrieval audit context must be an object");
+  }
+  if (
+    context.clientKind !== "desktop" &&
+    context.clientKind !== "codex" &&
+    context.clientKind !== "claude-code"
+  ) {
+    throw new TypeError("retrieval audit clientKind is invalid");
+  }
+  return context.clientKind;
+}
+
+function retrievalRequestId(db: VaultStorageConnection): string {
+  const existing = db.prepare(
+    "SELECT 1 FROM retrieval_events WHERE request_id = ? LIMIT 1",
+  );
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const requestId = randomBytes(32).toString("hex");
+    if (!existing.get(requestId)) return requestId;
+  }
+  throw new Error("Retrieval activity request ID allocation failed");
+}
+
+function retrievalActivityEntryFromRow(
+  row: RetrievalActivityRow,
+): RetrievalActivityEntry {
+  const resultCount = Number(row.result_count);
+  if (
+    !HASH_ID_PATTERN.test(row.request_id) ||
+    (
+      row.event_type !== "search" &&
+      row.event_type !== "fetch"
+    ) ||
+    (
+      row.client_kind !== "legacy" &&
+      row.client_kind !== "desktop" &&
+      row.client_kind !== "codex" &&
+      row.client_kind !== "claude-code"
+    ) ||
+    !Number.isSafeInteger(resultCount) ||
+    resultCount < 0 ||
+    typeof row.created_at !== "string" ||
+    row.created_at.length === 0 ||
+    row.created_at.length > 64 ||
+    !Number.isFinite(Date.parse(row.created_at))
+  ) {
+    throw new Error("Stored retrieval activity violates its content-free contract");
+  }
+  return {
+    requestId: row.request_id,
+    occurredAt: row.created_at,
+    eventType: row.event_type,
+    clientKind: row.client_kind,
+    resultCount,
+  };
 }
 
 function importPreparedFile(
@@ -2174,6 +2340,33 @@ function transaction<T>(db: VaultStorageConnection, operation: () => T): T {
     db.exec(`RELEASE SAVEPOINT ${name}`);
     throw error;
   }
+}
+
+function assertRetrievalAuditAvailable(vault: Vault): void {
+  if (stateFor(vault).importingSources.size > 0) {
+    throw new RetrievalAuditUnavailableError();
+  }
+}
+
+function retrievalAuditTransaction<T>(vault: Vault, operation: () => T): T {
+  const state = stateFor(vault);
+  if (state.importingSources.size > 0) {
+    throw new RetrievalAuditUnavailableError();
+  }
+  try {
+    return transaction(state.db, operation);
+  } catch (error) {
+    if (isSqliteBusyError(error)) {
+      throw new RetrievalAuditUnavailableError(error);
+    }
+    throw error;
+  }
+}
+
+function isSqliteBusyError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: unknown }).code;
+  return code === "SQLITE_BUSY" || error.message.toLowerCase().includes("database is locked");
 }
 
 let nextSavepointId = 1;

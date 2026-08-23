@@ -453,6 +453,7 @@ export function renderClaudeCodeMcpConfig(
 
   const env: Record<string, string> = {
     OWNCONTEXT_ALLOWED_COLLECTION: launch.allowedCollection,
+    OWNCONTEXT_CLIENT_KIND: "claude-code",
     OWNCONTEXT_MANAGED_BY: CLAUDE_CODE_MANAGED_MARKER,
     OWNCONTEXT_VAULT_PATH: launch.vaultPath,
   };
@@ -1325,13 +1326,20 @@ function isRecognizableManagedConfig(value: unknown): boolean {
     "OWNCONTEXT_MANAGED_BY",
     "OWNCONTEXT_VAULT_PATH",
   ];
+  const currentNodeKeys = [...nodeKeys, "OWNCONTEXT_CLIENT_KIND"].sort();
   const electronKeys = [...nodeKeys, "ELECTRON_RUN_AS_NODE"].sort();
+  const currentElectronKeys = [...currentNodeKeys, "ELECTRON_RUN_AS_NODE"].sort();
   const hasKnownEnvironmentShape =
-    jsonEqual(envKeys, nodeKeys) || jsonEqual(envKeys, electronKeys);
+    jsonEqual(envKeys, nodeKeys) ||
+    jsonEqual(envKeys, electronKeys) ||
+    jsonEqual(envKeys, currentNodeKeys) ||
+    jsonEqual(envKeys, currentElectronKeys);
 
   return (
     hasKnownEnvironmentShape &&
     env.OWNCONTEXT_MANAGED_BY === CLAUDE_CODE_MANAGED_MARKER &&
+    (env.OWNCONTEXT_CLIENT_KIND === undefined ||
+      env.OWNCONTEXT_CLIENT_KIND === "claude-code") &&
     isSafeAbsolutePath(env.OWNCONTEXT_VAULT_PATH) &&
     isSafeCollection(env.OWNCONTEXT_ALLOWED_COLLECTION) &&
     (env.ELECTRON_RUN_AS_NODE === undefined || env.ELECTRON_RUN_AS_NODE === "1")

@@ -70,7 +70,8 @@ only shipped provider is visibly identified as `node-sqlite-development` with a
 `plaintext-development` security profile; there is no implicit plaintext
 fallback. Its bounded, read-only compatibility parser checks the database
 header and, only when both header mode bytes declare WAL, valid WAL frames
-without opening SQLite. A mismatched WAL sidecar or rollback journal fails
+without opening SQLite. A stable zero-byte WAL created by a live reader is
+treated as having no frames. A mismatched WAL sidecar or rollback journal fails
 closed; a crash-style
 main-plus-WAL fixture from a newer schema is rejected without changing the
 original files. A packaged Windows x64 smoke also verifies a synthetic 32-byte
@@ -89,7 +90,7 @@ not yet atomic against an external writer.
 | Product, connector, platform, and security contracts | Complete baseline |
 | Atomic local SQLite/FTS vault | Implemented and prototype-tested |
 | Read-only local stdio MCP | Implemented and real-protocol tested |
-| Desktop import, sample onboarding, search, source removal, and Codex/Claude Code config | Developer alpha |
+| Desktop import, sample onboarding, search, source removal, access history, and Codex/Claude Code config | Developer alpha |
 | Explicit storage-provider boundary and synthetic Windows key envelope | Prototype-verified; real vault remains plaintext |
 | Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
 
@@ -97,10 +98,26 @@ Each desktop-managed MCP launch is currently pinned to the single `default`
 collection. Requests for another collection are rejected, and `fetch` accepts
 only IDs issued by `search` on the same connection. This is a default-deny
 boundary outside that launch-time grant, not the planned collection picker,
-grant expiry, or access-history UI. The current vault still uses one global FTS
+or grant expiry. The desktop now shows a bounded, content-free local access
+history attributed to desktop, a Codex/Claude Code launch declaration, or an
+honest legacy label;
+it never displays queries, bodies, titles, document/chunk IDs, or paths in that
+history. Client
+kind is fixed by the managed launch rather than tool input, but it is not
+cryptographic proof of provider receipt or retention. Packaged external-client
+and adversarial validation remain public-release gates. Retrieval returns no
+context if an import or another writer prevents its audit entry, and MCP returns
+a content-free retry instruction. The current vault still uses one global FTS
 index, so candidate work, cache effects, and response timing are not yet proven
 to be isolated between collections; public release remains blocked on that
 boundary.
+
+Schema-v3 upgrade also bounds legacy history before copying it: excess v1/v2
+rows are securely pruned in restart-safe 1,000-row batches with truncating WAL
+checkpoints. If another reader pins the WAL, the upgrade pauses safely and can
+resume after other OwnContext clients close. The bound is regression-tested at
+100,000 rows; it limits temporary WAL growth but does not shrink the existing
+main database file.
 
 Claude Code connection is user-scoped and respects an absolute
 `CLAUDE_CONFIG_DIR`. OwnContext previews only a path-redacted generated MCP

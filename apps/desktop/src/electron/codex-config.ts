@@ -27,6 +27,7 @@ export const MAX_MANAGED_BLOCK_BYTES = 16 * 1024;
 export type CodexConfigStatus =
   | "absent"
   | "managed"
+  | "managed_stale"
   | "unmanaged_conflict"
   | "malformed_managed_block"
   | "config_too_large"
@@ -149,13 +150,21 @@ export function createCodexConfigService(
     async preview(launch) {
       const snippet = safeSnippet(launch);
       const loaded = await loadConfig(configPath);
-      const status = loaded.status;
+      const status = loaded.status === "managed" && snippet !== undefined && loaded.managedRange
+        ? managedBlockMatches(loaded, snippet)
+          ? "managed"
+          : "managed_stale"
+        : loaded.status;
 
       return {
         status,
         canApply:
-          snippet !== undefined && (status === "absent" || status === "managed"),
-        canRemove: status === "managed",
+          snippet !== undefined && (
+            status === "absent" ||
+            status === "managed" ||
+            status === "managed_stale"
+          ),
+        canRemove: status === "managed" || status === "managed_stale",
         configExists: loaded.exists,
         snippet: snippet ?? "",
       };
@@ -285,6 +294,7 @@ export function renderOwnContextMcpBlock(launch: OwnContextMcpLaunch): string {
   const envEntries = [
     `OWNCONTEXT_VAULT_PATH = ${tomlString(launch.vaultPath)}`,
     `OWNCONTEXT_ALLOWED_COLLECTION = ${tomlString(launch.allowedCollection)}`,
+    'OWNCONTEXT_CLIENT_KIND = "codex"',
   ];
   if (launch.runtime === "electron") {
     envEntries.push('ELECTRON_RUN_AS_NODE = "1"');
@@ -441,6 +451,17 @@ function inspectConfigText(
   }
 
   return { status: "managed", managedRange: range };
+}
+
+function managedBlockMatches(loaded: LoadedConfig, snippet: string): boolean {
+  if (!loaded.managedRange) return false;
+  const block = loaded.text.slice(
+    loaded.managedRange.start,
+    loaded.managedRange.end,
+  );
+  const normalizeLineEndings = (value: string) =>
+    value.replaceAll("\r\n", "\n").replace(/\r$/u, "");
+  return normalizeLineEndings(block) === normalizeLineEndings(snippet);
 }
 
 function isWellFormedManagedBlock(block: string): boolean {
@@ -699,6 +720,7 @@ function statusToFailureCode(
       return status;
     case "absent":
     case "managed":
+    case "managed_stale":
       return undefined;
   }
 }

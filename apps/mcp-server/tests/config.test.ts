@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE,
+  CLIENT_KIND_ENVIRONMENT_VARIABLE,
   VAULT_ENVIRONMENT_VARIABLE,
   resolveAllowedCollection,
+  resolveClientKind,
   resolveVaultPath,
 } from "../src/config.js";
 
@@ -89,6 +91,26 @@ describe("resolveAllowedCollection", () => {
       expect(() => resolveAllowedCollection({
         env: { [ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE]: collection },
       })).toThrow(ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE);
+    },
+  );
+});
+
+describe("resolveClientKind", () => {
+  it.each(["codex", "claude-code"] as const)(
+    "accepts the trusted desktop launch identity %s",
+    (clientKind) => {
+      expect(resolveClientKind({
+        env: { [CLIENT_KIND_ENVIRONMENT_VARIABLE]: clientKind },
+      })).toBe(clientKind);
+    },
+  );
+
+  it.each([undefined, "", "desktop", "unknown", " codex extra "])(
+    "fails closed for an unsupported client identity: %j",
+    (clientKind) => {
+      expect(() => resolveClientKind({
+        env: { [CLIENT_KIND_ENVIRONMENT_VARIABLE]: clientKind },
+      })).toThrow(CLIENT_KIND_ENVIRONMENT_VARIABLE);
     },
   );
 });

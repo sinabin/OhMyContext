@@ -50,6 +50,10 @@ is default deny outside the single launch-time grant; collection selection,
 expiry, and multi-grant management are not implemented in the current desktop
 alpha.
 
+`OWNCONTEXT_CLIENT_KIND` is also required and currently accepts only `codex` or
+`claude-code`. It is fixed when the process starts and cannot be supplied by a
+tool request. Unknown or missing values fail startup closed.
+
 ## Tools
 
 ### `search`
@@ -83,12 +87,20 @@ content block for older clients. Their annotations are:
 ```
 
 `idempotentHint` is false because each successful retrieval appends a local,
-query-redacted audit event even though it does not alter the user's documents.
+content-free audit event without the query or a query hash, even though it does
+not alter the user's documents.
+If an import, removal, or another writer prevents that audit insert, `search`
+and `fetch` fail closed without returning context. The tool result contains only
+a bounded retry instruction, while stderr records the allowlisted
+`EOWNCONTEXT_AUDIT_BUSY` category without paths, queries, or document data.
 
 ## Client configuration
 
-Replace the sample paths with absolute paths on the local machine. Omitting the
-environment entry uses the OS-local default described above.
+Replace the sample paths with absolute paths on the local machine. The managed
+Codex and Claude Code launchers also set a required client kind so the local,
+content-free access history can distinguish their requests. This declaration is
+launcher metadata, not cryptographic proof of which upstream provider processed
+the returned context.
 
 Codex local developer configuration in `config.toml`:
 
@@ -96,7 +108,7 @@ Codex local developer configuration in `config.toml`:
 [mcp_servers.owncontext]
 command = "node"
 args = ["C:/absolute/path/to/owncontext/apps/mcp-server/dist/cli.js"]
-env = { OWNCONTEXT_VAULT_PATH = "C:/absolute/path/to/vault.sqlite3", OWNCONTEXT_ALLOWED_COLLECTION = "default" }
+env = { OWNCONTEXT_VAULT_PATH = "C:/absolute/path/to/vault.sqlite3", OWNCONTEXT_ALLOWED_COLLECTION = "default", OWNCONTEXT_CLIENT_KIND = "codex" }
 ```
 
 The desktop app writes the equivalent launch environment automatically.
@@ -136,7 +148,8 @@ does not install a Claude Desktop Extension or manage this configuration:
       ],
       "env": {
         "OWNCONTEXT_VAULT_PATH": "C:/absolute/path/to/vault.sqlite3",
-        "OWNCONTEXT_ALLOWED_COLLECTION": "default"
+        "OWNCONTEXT_ALLOWED_COLLECTION": "default",
+        "OWNCONTEXT_CLIENT_KIND": "planned-client-kind"
       }
     }
   }
@@ -146,7 +159,9 @@ does not install a Claude Desktop Extension or manage this configuration:
 Restart the client after changing its MCP configuration. Current Claude Desktop
 consumer distribution favors one-click Desktop Extensions (`.dxt`); an
 OwnContext DXT package remains a later, signed-distribution deliverable rather
-than a claim of this developer alpha.
+than a claim of this developer alpha. The placeholder client kind above is not
+accepted by the current server; Claude Desktop support requires an explicit,
+tested identity extension first.
 
 ## Verification
 
@@ -164,7 +179,8 @@ path/URL/SQL arguments. The protocol smoke test builds the CLI, imports fixtures
 into allowed and denied collections, and connects with the official stdio client
 transport; it verifies that denied canaries are not returned. A successful
 exchange also detects stdout contamination because non-JSON-RPC output breaks
-the transport parser.
+the transport parser. The same real-stdio test holds a competing vault writer
+and verifies the content-free audit-busy retry response and zero unlogged result.
 
 ## Trust boundary
 

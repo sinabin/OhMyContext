@@ -29,9 +29,10 @@ Windows x64 smoke has verified async Electron `safeStorage` wrapping and
 reopening of a synthetic 32-byte key in a strict envelope, including rejection
 of no-op wrappers whose decoded payload exposes tested raw, UTF-8, UTF-16, or
 UTF-32 key encodings. A bounded read-only database-header/WAL parser only uses a
-WAL when both database mode bytes declare WAL, fails closed on mismatched
-sidecars, and rejects a stopped crash-style WAL from a future schema without
-changing the original main/WAL inventory or bytes.
+WAL when both database mode bytes declare WAL, accepts a stable zero-byte WAL as
+having no frames, fails closed on mismatched sidecars, and rejects a stopped
+crash-style WAL from a future schema without changing the original main/WAL
+inventory or bytes.
 Neither change keys the real database: SQLite, FTS, WAL, temporary state, and
 whole configuration backups remain plaintext. The compatibility probe and real
 open are not atomic against a concurrent external writer. The UI continues to
@@ -117,9 +118,13 @@ and tested recovery.
 excerpts and provenance metadata remain local: a client may send titles, source
 paths, timestamps, stable IDs, and text to its model provider. The alpha names
 the destination, accessible collection, grant duration, and metadata categories.
-Per-client last-disclosed IDs are not yet available and remain a public-release
-gate because current retrieval events do not distinguish desktop search from a
-specific Codex or Claude connection.
+The prototype now distinguishes desktop and launch-declared Codex, Claude Code,
+or migrated legacy requests in a bounded local history. It exposes only request ID, time,
+request type, client kind, and result count; it does not expose last-disclosed
+document IDs or content. The client kind comes from the fixed managed-launch
+environment, not tool input, but is not cryptographic proof that a provider
+received or retained a response. Packaged external-client, spoofing, and
+adversarial validation remain public-release gates.
 
 ## Adversaries and failure cases
 
@@ -214,9 +219,20 @@ in plaintext.
 - Tool metadata declares read-only, closed-world behavior, but annotations are not treated as an enforcement boundary.
 - Each returned item includes provenance and an untrusted-content marker. OwnContext does not concatenate retrieved text into executable instructions.
 - The UI distinguishes fully offline local search from a cloud-AI flow. The
-  prototype records content-free retrieval IDs, but those events are not yet
-  attributable to a particular external client and therefore do not satisfy the
-  planned per-client disclosure history. Audit records exclude excerpt bodies.
+  prototype displays bounded content-free activity attributed to the desktop,
+  a Codex/Claude Code launch declaration, or an honest legacy label. The launch
+  declaration is not an authenticated client identity. Audit rows and the UI exclude
+  excerpt bodies, queries, titles, and paths. Clearing the local history does
+  not retract any response already received or retained outside OwnContext. An
+  open history screen requires explicit refresh to include new external-client
+  activity. If an import or another writer prevents the audit insert, retrieval
+  fails closed and returns no context rather than creating an unlogged disclosure.
+- A v1/v2 upgrade securely trims excess legacy audit rows in restart-safe
+  1,000-row transactions and requires a truncating WAL checkpoint between
+  batches before the final v3 copy. A pinned reader pauses the upgrade without
+  invalidating the old schema; closing other clients and reopening resumes it.
+  The 100,000-row regression bounds temporary WAL growth and retained history,
+  but no `VACUUM` is claimed and an existing main database file is not shrunk.
 - Changing a connection's executable, destination, or requested permissions requires a new preview and consent.
 
 ### Connectors and credentials
@@ -261,7 +277,7 @@ in plaintext.
 | Collection-scoped retrieval and FTS isolation | Milestones 1 and 6 | Returned-row canaries plus candidate/cache/timing non-interference pass | Returned rows prototype-verified for one launch-time allowed collection; global FTS candidate work and side channels are not partitioned or verified |
 | Read-only bounded `search`/`fetch`, search-issued IDs, stdio separation | Milestone 2 | Real-client protocol and authorization tests pass | Prototype verified with SDK client and real child process |
 | Built-in sample provenance | Milestone 3 | Packaged IPC/path/provenance adversarial suite passes | Prototype verified for fixed inventory, virtual URI, and main-process-only path/override boundary |
-| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability, per-client history, ACL/race-safe recovery, and disclosure tests pass | Codex and user-scoped Claude Code cases prototype-tested for non-sensitive fixtures; override-target tracking, DACL preservation, atomic CAS, and whole-backup lifecycle unverified; Claude Desktop Extension planned |
+| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability, packaged external-client history, ACL/race-safe recovery, and disclosure tests pass | Codex and user-scoped Claude Code configuration plus content-free client-attributed history are prototype-tested for non-sensitive fixtures; live external-client confirmation, override-target tracking, DACL preservation, atomic CAS, and whole-backup lifecycle unverified; Claude Desktop Extension planned |
 | Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Source-level logical purge and receipt prototype verified; portable export and complete residue coverage remain designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
 | Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Explicit plaintext-provider boundary and packaged synthetic OS-key envelope prototype verified; real DB/index/WAL/temp/backups remain plaintext |

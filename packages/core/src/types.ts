@@ -144,6 +144,33 @@ export interface SearchVaultInput {
   limit?: number;
 }
 
+/** Trusted caller identity attached outside the retrieval tool/input payload. */
+export type RetrievalClientKind = "desktop" | "codex" | "claude-code";
+
+export interface RetrievalAuditContext {
+  clientKind: RetrievalClientKind;
+}
+
+export type RetrievalActivityClientKind = RetrievalClientKind | "legacy";
+export type RetrievalActivityEventType = "search" | "fetch";
+
+/**
+ * Content-free retrieval history projected for local UI. It deliberately omits
+ * queries, query hashes, document/chunk IDs, titles, snippets, and source paths.
+ */
+export interface RetrievalActivityEntry {
+  requestId: string;
+  occurredAt: string;
+  eventType: RetrievalActivityEventType;
+  clientKind: RetrievalActivityClientKind;
+  resultCount: number;
+}
+
+export interface ListRetrievalActivityOptions {
+  /** Number of newest request entries to return. Defaults to 50; maximum 100. */
+  limit?: number;
+}
+
 export interface VaultResult {
   documentId: string;
   chunkId: string;

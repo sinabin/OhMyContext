@@ -84,6 +84,18 @@ export function inspectNodeSqliteSchemaVersion(location: string): number {
     }
 
     wal = openRegularFile(walPath);
+    // SQLite can create a legitimate zero-byte WAL while a read connection is
+    // open after a successful truncating checkpoint. It contains no frames, so
+    // the committed schema version still comes from the main header. Accept it
+    // only after the same identity/state checks used for populated sidecars.
+    if (wal.initial.size === 0n) {
+      assertOpenFileStable(wal);
+      assertOpenFileStable(main, mainHeader);
+      if (existsSync(`${location}-journal`)) {
+        throw new Error("Vault storage changed during schema inspection.");
+      }
+      return parsedMain.schemaVersion;
+    }
     if (
       wal.initial.size < BigInt(WAL_HEADER_BYTES) ||
       wal.initial.size > BigInt(MAX_SCHEMA_INSPECTION_WAL_BYTES)

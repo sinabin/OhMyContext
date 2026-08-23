@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -7,15 +7,19 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   HASH_ID_PATTERN,
+  MAX_RETRIEVAL_ACTIVITY_RESULTS,
+  MAX_RETRIEVAL_ACTIVITY_ROWS,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
   OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
   commitPreparedDirectoryImport,
+  clearRetrievalActivity,
   createNodeSqliteDevelopmentStorageProvider,
   deterministicId,
   fetchDocument,
   importDirectory,
   importOwnContextSampleLibrary,
   listDeletionReceipts,
+  listRetrievalActivity,
   listSources,
   openVault,
   prepareDirectoryImport,
@@ -28,6 +32,9 @@ import {
   type ImportDirectoryOptions,
   type ImportProgress,
   type PreparedDirectoryImport,
+  type RetrievalAuditContext,
+  type VaultStorageConnection,
+  type VaultStorageProvider,
 } from "../src/index.js";
 
 const temporaryPaths: string[] = [];
@@ -49,6 +56,22 @@ async function fixture(): Promise<{ root: string; dbPath: string; vault: Vault }
   const vault = openVault(dbPath, createNodeSqliteDevelopmentStorageProvider());
   openVaults.push(vault);
   return { root: documents, dbPath, vault };
+}
+
+function replaceRetrievalActivityWithVersionOneSchema(db: DatabaseSync): void {
+  db.exec(`
+    DROP TABLE retrieval_events;
+    CREATE TABLE retrieval_events (
+      id INTEGER PRIMARY KEY,
+      event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+      query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+      document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+      chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+      result_count INTEGER NOT NULL CHECK(result_count >= 0),
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+  `);
 }
 
 describe("deterministic IDs", () => {
@@ -846,7 +869,7 @@ describe("vault ingestion and retrieval", () => {
     expect(() => openVault(
       dbPath,
       createNodeSqliteDevelopmentStorageProvider(),
-    )).toThrow("Vault schema version 99 is newer than supported version 2");
+    )).toThrow("Vault schema version 99 is newer than supported version 3");
 
     expect(await readFile(dbPath)).toEqual(before);
     expect(existsSync(`${dbPath}-wal`)).toBe(false);
@@ -863,6 +886,7 @@ describe("vault ingestion and retrieval", () => {
     vault.close();
     openVaults.splice(openVaults.indexOf(vault), 1);
     const downgrade = new DatabaseSync(dbPath);
+    replaceRetrievalActivityWithVersionOneSchema(downgrade);
     downgrade.exec(`
       DROP TABLE deletion_receipts;
       INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 0);
@@ -884,7 +908,7 @@ describe("vault ingestion and retrieval", () => {
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deletion_receipts'
     `).get();
     inspection.close();
-    expect(Number(version.user_version)).toBe(2);
+    expect(Number(version.user_version)).toBe(3);
     expect(Number(ftsConfig.v)).toBe(1);
     expect(receiptTable).toBeDefined();
   });
@@ -905,6 +929,7 @@ describe("vault ingestion and retrieval", () => {
     expect((await readFile(dbPath)).includes(Buffer.from(canary, "utf8"))).toBe(true);
 
     const downgrade = new DatabaseSync(dbPath);
+    replaceRetrievalActivityWithVersionOneSchema(downgrade);
     downgrade.exec(`
       DROP TABLE deletion_receipts;
       PRAGMA user_version = 1;
@@ -1047,7 +1072,651 @@ describe("vault ingestion and retrieval", () => {
     expect(searchVault(vault, { query: "12345" })).toEqual([]);
   });
 
-  it("stores only a deterministic query hash in local retrieval events", async () => {
+  it("projects bounded content-free retrieval activity by trusted client", async () => {
+    const { root, dbPath, vault } = await fixture();
+    const titleCanary = "private-title-must-not-enter-activity";
+    const pathCanary = "private-path-must-not-enter-activity.md";
+    const queryCanary = "activity-query-canary-413729";
+    await writeFile(
+      join(root, pathCanary),
+      `# ${titleCanary}\n\n${queryCanary} appears in this private body.`,
+      "utf8",
+    );
+    await writeFile(
+      join(root, "second.md"),
+      `# Second private title\n\n${queryCanary} appears again.`,
+      "utf8",
+    );
+    await importDirectory(vault, root);
+
+    const codexResults = searchVault(
+      vault,
+      { query: queryCanary },
+      { clientKind: "codex" },
+    );
+    expect(codexResults).toHaveLength(2);
+    expect(fetchDocument(
+      vault,
+      {
+        documentId: codexResults[0]!.documentId,
+        chunkId: codexResults[0]!.chunkId,
+      },
+      { clientKind: "claude-code" },
+    )).not.toBeNull();
+    expect(searchVault(vault, { query: "no-result-desktop-query" })).toEqual([]);
+
+    const activity = listRetrievalActivity(vault);
+    expect(activity).toHaveLength(3);
+    expect(activity.map((entry) => ({
+      clientKind: entry.clientKind,
+      eventType: entry.eventType,
+      resultCount: entry.resultCount,
+    }))).toEqual([
+      { clientKind: "desktop", eventType: "search", resultCount: 0 },
+      { clientKind: "claude-code", eventType: "fetch", resultCount: 1 },
+      { clientKind: "codex", eventType: "search", resultCount: 2 },
+    ]);
+    for (const entry of activity) {
+      expect(entry.requestId).toMatch(HASH_ID_PATTERN);
+      expect(Number.isFinite(Date.parse(entry.occurredAt))).toBe(true);
+      expect(Object.keys(entry).sort()).toEqual([
+        "clientKind",
+        "eventType",
+        "occurredAt",
+        "requestId",
+        "resultCount",
+      ]);
+    }
+    const serialized = JSON.stringify(activity);
+    for (const forbidden of [titleCanary, pathCanary, queryCanary, "private body"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const columns = db.prepare("PRAGMA table_info(retrieval_events)")
+      .all().map((row) => String(row.name));
+    db.close();
+    expect(columns).toEqual([
+      "id",
+      "request_id",
+      "client_kind",
+      "event_type",
+      "document_id",
+      "chunk_id",
+      "result_count",
+      "created_at",
+    ]);
+    for (const forbiddenColumn of ["query", "snippet", "title", "path", "source_uri"]) {
+      expect(columns).not.toContain(forbiddenColumn);
+    }
+
+    expect(clearRetrievalActivity(vault)).toBe(3);
+    expect(listRetrievalActivity(vault)).toEqual([]);
+    expect(clearRetrievalActivity(vault)).toBe(0);
+  });
+
+  it("rejects untrusted audit identities and bounds activity reads", async () => {
+    const { vault } = await fixture();
+    expect(() => searchVault(
+      vault,
+      { query: "not executed" },
+      { clientKind: "browser-tool-input" } as unknown as RetrievalAuditContext,
+    )).toThrow("clientKind is invalid");
+    expect(listRetrievalActivity(vault)).toEqual([]);
+    expect(MAX_RETRIEVAL_ACTIVITY_RESULTS).toBe(100);
+    expect(() => listRetrievalActivity(vault, { limit: 0 })).toThrow(RangeError);
+    expect(() => listRetrievalActivity(vault, { limit: 101 })).toThrow(RangeError);
+    expect(() => listRetrievalActivity(
+      vault,
+      null as unknown as { limit?: number },
+    )).toThrow(TypeError);
+  });
+
+  it("enforces the physical retrieval activity row cap on open and write", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+
+    const setup = new DatabaseSync(dbPath);
+    setup.exec("BEGIN IMMEDIATE");
+    const insert = setup.prepare(`
+      INSERT INTO retrieval_events(
+        request_id, client_kind, event_type, document_id, chunk_id,
+        result_count, created_at
+      ) VALUES (?, 'desktop', 'search', NULL, NULL, 0, ?)
+    `);
+    for (let index = 1; index <= MAX_RETRIEVAL_ACTIVITY_ROWS + 5; index += 1) {
+      insert.run(index.toString(16).padStart(64, "0"), "2026-08-23T00:00:00.000Z");
+    }
+    setup.exec("COMMIT");
+    setup.close();
+
+    const reopened = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
+    openVaults.push(reopened);
+    const countRows = () => {
+      const inspection = new DatabaseSync(dbPath, { readOnly: true });
+      const row = inspection.prepare("SELECT count(*) AS count FROM retrieval_events")
+        .get() as { count: number | bigint };
+      inspection.close();
+      return Number(row.count);
+    };
+    expect(MAX_RETRIEVAL_ACTIVITY_ROWS).toBe(10_000);
+    expect(countRows()).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS);
+    expect(listRetrievalActivity(reopened, { limit: 100 })).toHaveLength(100);
+
+    expect(searchVault(reopened, { query: "one more bounded event" })).toEqual([]);
+    expect(countRows()).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS);
+  });
+
+  it("migrates version-two retrieval rows as unattributed legacy activity", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      DROP TABLE retrieval_events;
+      CREATE TABLE retrieval_events (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+        query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+        result_count INTEGER NOT NULL CHECK(result_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+      INSERT INTO retrieval_events(
+        event_type, query_hash, document_id, chunk_id, result_count, created_at
+      ) VALUES (
+        'search', '${"ab".repeat(32)}', NULL, NULL, 3,
+        '2026-08-22T01:02:03.004Z'
+      ), (
+        'search', '${"ab".repeat(32)}', NULL, NULL, 3,
+        '2026-08-22T01:02:03.004Z'
+      ), (
+        'search', '${"ab".repeat(32)}', NULL, NULL, 3,
+        '2026-08-22T01:02:03.004Z'
+      );
+      PRAGMA user_version = 2;
+    `);
+    setup.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    setup.close();
+
+    const migrated = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
+    openVaults.push(migrated);
+    const activity = listRetrievalActivity(migrated);
+    expect(activity).toEqual([{
+      requestId: expect.stringMatching(HASH_ID_PATTERN),
+      occurredAt: "2026-08-22T01:02:03.004Z",
+      eventType: "search",
+      clientKind: "legacy",
+      resultCount: 3,
+    }]);
+
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const version = inspection.prepare("PRAGMA user_version").get() as {
+      user_version: number | bigint;
+    };
+    const stored = inspection.prepare(`
+      SELECT client_kind, request_id FROM retrieval_events ORDER BY id
+    `).all() as Array<{ client_kind: string; request_id: string }>;
+    const columns = inspection.prepare("PRAGMA table_info(retrieval_events)")
+      .all().map((row) => String(row.name));
+    inspection.close();
+    expect(Number(version.user_version)).toBe(3);
+    expect(stored).toHaveLength(3);
+    expect(stored.every((row) => row.client_kind === "legacy")).toBe(true);
+    expect(new Set(stored.map((row) => row.request_id))).toEqual(
+      new Set([activity[0]!.requestId]),
+    );
+    expect(columns).not.toContain("query_hash");
+  });
+
+  it("copies only the newest bounded rows while migrating a large version-two history", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+
+    const legacyRowCount = MAX_RETRIEVAL_ACTIVITY_ROWS + 90_000;
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      DROP TABLE retrieval_events;
+      CREATE TABLE retrieval_events (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+        query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+        result_count INTEGER NOT NULL CHECK(result_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+      WITH RECURSIVE sequence(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1
+        FROM sequence
+        WHERE value < ${legacyRowCount}
+      )
+      INSERT INTO retrieval_events(
+        id, event_type, query_hash, document_id, chunk_id, result_count, created_at
+      )
+      SELECT value, 'search', NULL, NULL, NULL, 0, printf('legacy-%05d', value)
+      FROM sequence;
+      PRAGMA user_version = 2;
+    `);
+    setup.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    setup.close();
+
+    const mainDatabaseBytes = statSync(dbPath).size;
+    let checkpointCount = 0;
+    let peakWalBytes = 0;
+    const sampleWal = () => {
+      const walPath = `${dbPath}-wal`;
+      if (existsSync(walPath)) {
+        peakWalBytes = Math.max(peakWalBytes, statSync(walPath).size);
+      }
+    };
+    const baseProvider = createNodeSqliteDevelopmentStorageProvider();
+    const observingProvider: VaultStorageProvider = {
+      descriptor: baseProvider.descriptor,
+      inspectSchemaVersion: baseProvider.inspectSchemaVersion,
+      open: (location) => {
+        const connection = baseProvider.open(location);
+        const wrapped: VaultStorageConnection = {
+          close: () => {
+            connection.close();
+            sampleWal();
+          },
+          exec: (sql) => {
+            connection.exec(sql);
+            sampleWal();
+          },
+          prepare: (sql) => {
+            const statement = connection.prepare(sql);
+            const isCheckpoint = sql.trim().toLowerCase() ===
+              "pragma wal_checkpoint(truncate)";
+            return {
+              all: (...parameters) => {
+                const result = statement.all(...parameters);
+                sampleWal();
+                return result;
+              },
+              get: (...parameters) => {
+                const result = statement.get(...parameters);
+                if (isCheckpoint) checkpointCount += 1;
+                sampleWal();
+                return result;
+              },
+              run: (...parameters) => {
+                const result = statement.run(...parameters);
+                sampleWal();
+                return result;
+              },
+            };
+          },
+        };
+        return wrapped;
+      },
+    };
+    const migrated = openVault(
+      dbPath,
+      observingProvider,
+    );
+    openVaults.push(migrated);
+
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const bounds = inspection.prepare(`
+      SELECT count(*) AS count, min(id) AS minimum_id, max(id) AS maximum_id
+      FROM retrieval_events
+    `).get() as {
+      count: number | bigint;
+      minimum_id: number | bigint;
+      maximum_id: number | bigint;
+    };
+    inspection.close();
+    expect(Number(bounds.count)).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS);
+    expect(Number(bounds.minimum_id)).toBe(legacyRowCount - MAX_RETRIEVAL_ACTIVITY_ROWS + 1);
+    expect(Number(bounds.maximum_id)).toBe(legacyRowCount);
+    expect(checkpointCount).toBeGreaterThan(10);
+    expect(peakWalBytes).toBeLessThan(mainDatabaseBytes / 2);
+  });
+
+  it("resumes a bounded version-two migration after a reader blocks its WAL checkpoint", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      DROP TABLE retrieval_events;
+      CREATE TABLE retrieval_events (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+        query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+        result_count INTEGER NOT NULL CHECK(result_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+      WITH RECURSIVE sequence(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1
+        FROM sequence
+        WHERE value < ${MAX_RETRIEVAL_ACTIVITY_ROWS + 5}
+      )
+      INSERT INTO retrieval_events(
+        id, event_type, query_hash, document_id, chunk_id, result_count, created_at
+      )
+      SELECT value, 'search', NULL, NULL, NULL, 0, printf('legacy-%05d', value)
+      FROM sequence;
+      PRAGMA user_version = 2;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    setup.close();
+
+    const reader = new DatabaseSync(dbPath, { readOnly: true });
+    reader.exec("BEGIN;");
+    const pinnedCount = reader.prepare(
+      "SELECT count(*) AS count FROM retrieval_events",
+    ).get() as { count: number | bigint };
+    expect(Number(pinnedCount.count)).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS + 5);
+
+    const attemptMigration = (): unknown => {
+      try {
+        const unexpected = openVault(
+          dbPath,
+          createNodeSqliteDevelopmentStorageProvider(),
+        );
+        unexpected.close();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    };
+    try {
+      const firstError = attemptMigration();
+      expect(firstError).toBeInstanceOf(Error);
+      expect((firstError as Error).message).toContain(
+        "migration paused because another reader prevented a bounded WAL checkpoint",
+      );
+      const pendingWalBytes = statSync(`${dbPath}-wal`).size;
+
+      const retryError = attemptMigration();
+      expect(retryError).toBeInstanceOf(Error);
+      expect((retryError as Error).message).toContain(
+        "migration paused because another reader prevented a bounded WAL checkpoint",
+      );
+      expect(statSync(`${dbPath}-wal`).size).toBe(pendingWalBytes);
+    } finally {
+      reader.exec("ROLLBACK;");
+      reader.close();
+    }
+
+    const partiallyPruned = new DatabaseSync(dbPath, { readOnly: true });
+    const intermediateVersion = partiallyPruned.prepare(
+      "PRAGMA user_version",
+    ).get() as { user_version: number | bigint };
+    const intermediateCount = partiallyPruned.prepare(
+      "SELECT count(*) AS count FROM retrieval_events",
+    ).get() as { count: number | bigint };
+    partiallyPruned.close();
+    expect(Number(intermediateVersion.user_version)).toBe(2);
+    expect(Number(intermediateCount.count)).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS);
+
+    const resumed = openVault(
+      dbPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
+    openVaults.push(resumed);
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const finalVersion = inspection.prepare("PRAGMA user_version").get() as {
+      user_version: number | bigint;
+    };
+    const finalCount = inspection.prepare(
+      "SELECT count(*) AS count FROM retrieval_events",
+    ).get() as { count: number | bigint };
+    inspection.close();
+    expect(Number(finalVersion.user_version)).toBe(3);
+    expect(Number(finalCount.count)).toBe(MAX_RETRIEVAL_ACTIVITY_ROWS);
+  }, 20_000);
+
+  it("rechecks the live schema under lock before acting on a stale inspection", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      DROP TABLE retrieval_events;
+      CREATE TABLE retrieval_events (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+        query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+        result_count INTEGER NOT NULL CHECK(result_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+      INSERT INTO retrieval_events(
+        event_type, query_hash, document_id, chunk_id, result_count, created_at
+      ) VALUES
+        ('search', '${"ab".repeat(32)}', NULL, NULL, 2, '2026-08-23T01:02:03.004Z'),
+        ('search', '${"ab".repeat(32)}', NULL, NULL, 2, '2026-08-23T01:02:03.004Z');
+      PRAGMA user_version = 2;
+    `);
+    setup.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    setup.close();
+
+    const baseProvider = createNodeSqliteDevelopmentStorageProvider();
+    let migrationInjected = false;
+    const raceProvider: VaultStorageProvider = {
+      descriptor: baseProvider.descriptor,
+      inspectSchemaVersion: baseProvider.inspectSchemaVersion,
+      open: (location) => {
+        const connection = baseProvider.open(location);
+        const wrapped: VaultStorageConnection = {
+          close: () => connection.close(),
+          exec: (sql) => connection.exec(sql),
+          prepare: (sql) => {
+            const statement = connection.prepare(sql);
+            if (sql.trim().toLowerCase() !== "pragma user_version") return statement;
+            return {
+              all: (...parameters) => statement.all(...parameters),
+              run: (...parameters) => statement.run(...parameters),
+              get: (...parameters) => {
+                const staleVersion = statement.get(...parameters);
+                if (!migrationInjected) {
+                  migrationInjected = true;
+                  const winner = openVault(location, {
+                    descriptor: baseProvider.descriptor,
+                    inspectSchemaVersion: () => 2,
+                    open: baseProvider.open,
+                  });
+                  winner.close();
+                }
+                return staleVersion;
+              },
+            };
+          },
+        };
+        return wrapped;
+      },
+    };
+    const racedOpen = openVault(dbPath, raceProvider);
+    openVaults.push(racedOpen);
+
+    expect(migrationInjected).toBe(true);
+    expect(listRetrievalActivity(racedOpen)).toEqual([{
+      requestId: expect.stringMatching(HASH_ID_PATTERN),
+      occurredAt: "2026-08-23T01:02:03.004Z",
+      eventType: "search",
+      clientKind: "legacy",
+      resultCount: 2,
+    }]);
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const version = inspection.prepare("PRAGMA user_version").get() as {
+      user_version: number | bigint;
+    };
+    const rows = inspection.prepare("SELECT request_id, client_kind FROM retrieval_events ORDER BY id")
+      .all() as Array<{ request_id: string; client_kind: string }>;
+    inspection.close();
+    expect(Number(version.user_version)).toBe(3);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.request_id)).size).toBe(1);
+    expect(rows.every((row) => row.client_kind === "legacy")).toBe(true);
+  });
+
+  it("opens a healthy current vault without competing for an active writer slot", async () => {
+    const { dbPath } = await fixture();
+    const writer = new DatabaseSync(dbPath);
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      const concurrentReader = openVault(
+        dbPath,
+        createNodeSqliteDevelopmentStorageProvider(),
+      );
+      openVaults.push(concurrentReader);
+      expect(listRetrievalActivity(concurrentReader)).toEqual([]);
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+  });
+
+  it("fails retrieval closed when another process prevents its audit write", async () => {
+    const root = await mkdtemp(join(tmpdir(), "owncontext-audit-busy-"));
+    temporaryPaths.push(root);
+    const documents = join(root, "documents");
+    await mkdir(documents);
+    await writeFile(join(documents, "busy.md"), "audit-busy-canary", "utf8");
+    const dbPath = join(root, "vault.sqlite");
+    const baseProvider = createNodeSqliteDevelopmentStorageProvider();
+    let capturedConnection: VaultStorageConnection | undefined;
+    const provider: VaultStorageProvider = {
+      descriptor: baseProvider.descriptor,
+      inspectSchemaVersion: baseProvider.inspectSchemaVersion,
+      open: (location) => {
+        capturedConnection = baseProvider.open(location);
+        return capturedConnection;
+      },
+    };
+    const vault = openVault(dbPath, provider);
+    openVaults.push(vault);
+    const imported = await importDirectory(vault, documents);
+    capturedConnection?.exec("PRAGMA busy_timeout = 1");
+
+    const writer = new DatabaseSync(dbPath);
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      expect(() => searchVault(vault, { query: "no-match" })).toThrow(
+        "No context was returned because OwnContext could not record this access",
+      );
+      expect(() => fetchDocument(vault, {
+        documentId: imported.documents[0]?.documentId ?? "",
+      })).toThrow(
+        "No context was returned because OwnContext could not record this access",
+      );
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+    expect(listRetrievalActivity(vault)).toEqual([]);
+    expect(searchVault(vault, { query: "audit-busy-canary" })).toHaveLength(1);
+  });
+
+  it("fails retrieval closed while the same vault is importing", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "existing.md"), "same-process-audit-canary", "utf8");
+    const firstImport = await importDirectory(vault, root);
+    await writeFile(join(root, "new.md"), "second import", "utf8");
+    let guarded = false;
+
+    await importDirectory(vault, root, {
+      onProgress: (progress) => {
+        if (guarded || progress.phase !== "discovering") return;
+        guarded = true;
+        expect(() => searchVault(vault, { query: "same-process-audit-canary" })).toThrow(
+          "No context was returned because OwnContext could not record this access",
+        );
+        expect(() => fetchDocument(vault, {
+          documentId: firstImport.documents[0]?.documentId ?? "",
+        })).toThrow(
+          "No context was returned because OwnContext could not record this access",
+        );
+      },
+    });
+
+    expect(guarded).toBe(true);
+    expect(listRetrievalActivity(vault)).toEqual([]);
+  });
+
+  it("fails a still-running version-two writer closed after migration without corrupting v3", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+
+    const legacyWriter = new DatabaseSync(dbPath);
+    try {
+      legacyWriter.exec(`
+        DROP TABLE retrieval_events;
+        CREATE TABLE retrieval_events (
+          id INTEGER PRIMARY KEY,
+          event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+          query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+          document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+          chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+          result_count INTEGER NOT NULL CHECK(result_count >= 0),
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+        PRAGMA user_version = 2;
+      `);
+      const oldInsert = legacyWriter.prepare(`
+        INSERT INTO retrieval_events(
+          event_type, query_hash, document_id, chunk_id, result_count, created_at
+        ) VALUES ('search', ?, NULL, NULL, 0, ?)
+      `);
+
+      const migrated = openVault(
+        dbPath,
+        createNodeSqliteDevelopmentStorageProvider(),
+      );
+      openVaults.push(migrated);
+      expect(() => oldInsert.run(
+        "ab".repeat(32),
+        "2026-08-23T00:00:00.000Z",
+      )).toThrow();
+
+      expect(listRetrievalActivity(migrated)).toEqual([]);
+      expect(searchVault(migrated, { query: "new writer remains usable" })).toEqual([]);
+      expect(listRetrievalActivity(migrated)).toMatchObject([{
+        eventType: "search",
+        clientKind: "desktop",
+        resultCount: 0,
+      }]);
+
+      const inspection = new DatabaseSync(dbPath, { readOnly: true });
+      const integrity = inspection.prepare("PRAGMA integrity_check").get() as {
+        integrity_check: string;
+      };
+      inspection.close();
+      expect(integrity.integrity_check).toBe("ok");
+    } finally {
+      legacyWriter.close();
+    }
+  });
+
+  it("stores neither plaintext nor hashed search queries in retrieval activity", async () => {
     const { root, dbPath, vault } = await fixture();
     await writeFile(join(root, "audit.txt"), "ordinary indexed material", "utf8");
     await importDirectory(vault, root);
@@ -1058,15 +1727,20 @@ describe("vault ingestion and retrieval", () => {
 
     const db = new DatabaseSync(dbPath, { readOnly: true });
     const event = db.prepare(`
-      SELECT query_hash FROM retrieval_events WHERE event_type = 'search'
-    `).get() as { query_hash: string };
+      SELECT event_type, result_count FROM retrieval_events WHERE event_type = 'search'
+    `).get();
     const columns = db.prepare("PRAGMA table_info(retrieval_events)")
       .all().map((row) => String(row.name));
-    expect(event.query_hash).toBe(deterministicId("retrieval-query", rawQuery));
-    expect(columns).toContain("query_hash");
+    expect(event).toBeDefined();
+    expect(columns).not.toContain("query_hash");
     expect(columns).not.toContain("query");
     db.close();
-    expect((await readFile(dbPath)).includes(Buffer.from(rawQuery, "utf8"))).toBe(false);
+    const databaseBytes = await readFile(dbPath);
+    expect(databaseBytes.includes(Buffer.from(rawQuery, "utf8"))).toBe(false);
+    expect(databaseBytes.includes(Buffer.from(
+      deterministicId("retrieval-query", rawQuery),
+      "utf8",
+    ))).toBe(false);
   });
 
   it("rolls back a first import and exposes no partial document after interruption", async () => {

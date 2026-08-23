@@ -55,6 +55,7 @@ describe("Codex OwnContext MCP configuration service", () => {
     });
     expect(preview.snippet).toContain("OWNCONTEXT_VAULT_PATH");
     expect(preview.snippet).toContain('OWNCONTEXT_ALLOWED_COLLECTION = "default"');
+    expect(preview.snippet).toContain('OWNCONTEXT_CLIENT_KIND = "codex"');
     expect(preview.snippet).toContain('ELECTRON_RUN_AS_NODE = "1"');
 
     const result = await service.apply(launch);
@@ -114,6 +115,30 @@ describe("Codex OwnContext MCP configuration service", () => {
     expect(updated.match(new RegExp(escapeRegex(OWNCONTEXT_MARKER_START), "g"))).toHaveLength(
       1,
     );
+  });
+
+  it("marks a pre-client-label managed block stale and refreshes it safely", async () => {
+    const current = renderOwnContextMcpBlock(launch);
+    const legacy = current.replace(', OWNCONTEXT_CLIENT_KIND = "codex"', "");
+    await mkdir(codexDirectory, { recursive: true });
+    await writeFile(configPath, `${legacy}\n`, "utf8");
+    const service = createCodexConfigService({ configPath });
+
+    expect(await service.preview(launch)).toMatchObject({
+      status: "managed_stale",
+      canApply: true,
+      canRemove: true,
+    });
+    await expect(service.apply(launch)).resolves.toMatchObject({
+      ok: true,
+      code: "applied",
+      changed: true,
+      backupCreated: true,
+    });
+    expect(await readFile(configPath, "utf8")).toBe(`${current}\n`);
+    await expect(service.preview(launch)).resolves.toMatchObject({
+      status: "managed",
+    });
   });
 
   it("refreshes only an existing managed block and never creates an absent one", async () => {

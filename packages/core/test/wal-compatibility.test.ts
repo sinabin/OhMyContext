@@ -188,6 +188,33 @@ async function createCommittedVersionTwoWal(root: string): Promise<string> {
 }
 
 describe("future-schema compatibility in a crash-style WAL", () => {
+  it("accepts a stable empty WAL created by a live read connection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "owncontext-empty-wal-"));
+    temporaryPaths.push(root);
+    const databasePath = join(root, "reader.sqlite");
+    const setup = new DatabaseSync(databasePath);
+    setup.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE stable(value TEXT) STRICT;
+      PRAGMA user_version = 2;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    setup.close();
+
+    const reader = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      reader.exec("BEGIN;");
+      reader.prepare("SELECT count(*) FROM stable").get();
+      const walPath = `${databasePath}-wal`;
+      expect(existsSync(walPath)).toBe(true);
+      expect((await stat(walPath)).size).toBe(0);
+      expect(inspectNodeSqliteSchemaVersion(databasePath)).toBe(2);
+    } finally {
+      reader.exec("ROLLBACK;");
+      reader.close();
+    }
+  });
+
   it.each([512, 4_096, 65_536])(
     "reads the latest committed page-one version from a checksum-valid %i-byte WAL",
     async (pageSize) => {
@@ -216,7 +243,7 @@ describe("future-schema compatibility in a crash-style WAL", () => {
     expect(() => openVault(
       databasePath,
       createNodeSqliteDevelopmentStorageProvider(),
-    )).toThrow("Vault schema version 99 is newer than supported version 2");
+    )).toThrow("Vault schema version 99 is newer than supported version 3");
 
     const after = await snapshotVaultFiles(root, databasePath);
     expect(after.inventory).toEqual(before.inventory);

@@ -13,6 +13,7 @@ const SHA256_ID_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_ISSUED_DOCUMENTS = 512;
 const MAX_ISSUED_CHUNKS_PER_DOCUMENT = 64;
 const UNTRUSTED_CONTENT_MARKER = "untrusted-user-data" as const;
+const RETRIEVAL_AUDIT_BUSY_CODE = "EOWNCONTEXT_AUDIT_BUSY";
 
 const idSchema = z
   .string()
@@ -112,6 +113,8 @@ export type OwnContextServerOptions = {
   api: VaultReadApi;
   /** One launch-time collection grant. Tool arguments cannot broaden it. */
   allowedCollection: string;
+  /** Trusted launch-time identity. Tool arguments cannot select it. */
+  clientKind: "codex" | "claude-code";
   writeDiagnostic?: (message: string) => void;
 };
 
@@ -209,6 +212,10 @@ export function createOwnContextServer(
   ) {
     throw new TypeError("allowedCollection must contain 1 to 128 safe characters.");
   }
+  if (options.clientKind !== "codex" && options.clientKind !== "claude-code") {
+    throw new TypeError("clientKind must identify a supported desktop AI client.");
+  }
+  const auditContext = Object.freeze({ clientKind: options.clientKind });
   const writeDiagnostic =
     options.writeDiagnostic ?? ((message: string) => process.stderr.write(message));
   const issuedDocuments = new Map<string, Set<string>>();
@@ -238,6 +245,7 @@ export function createOwnContextServer(
         const vaultResults = api.searchVault(
           vault,
           copySearchInput(parsed, allowedCollection),
+          auditContext,
         );
         rememberIssuedResults(issuedDocuments, vaultResults);
         const results = vaultResults.map((result) => ({
@@ -262,6 +270,18 @@ export function createOwnContextServer(
               {
                 type: "text" as const,
                 text: "Search denied: the requested collection is outside this connection's allowed scope.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (isRetrievalAuditUnavailableError(error)) {
+          writeDiagnostic(formatFailureDiagnostic("search", error));
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
               },
             ],
             isError: true,
@@ -310,7 +330,11 @@ export function createOwnContextServer(
       }
 
       try {
-        const vaultDocument = api.fetchDocument(vault, copyFetchInput(parsed));
+        const vaultDocument = api.fetchDocument(
+          vault,
+          copyFetchInput(parsed),
+          auditContext,
+        );
 
         if (vaultDocument === null) {
           return {
@@ -344,6 +368,18 @@ export function createOwnContextServer(
           structuredContent,
         };
       } catch (error) {
+        if (isRetrievalAuditUnavailableError(error)) {
+          writeDiagnostic(formatFailureDiagnostic("fetch", error));
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
+              },
+            ],
+            isError: true,
+          };
+        }
         writeDiagnostic(formatFailureDiagnostic("fetch", error));
         return {
           content: [
@@ -359,4 +395,11 @@ export function createOwnContextServer(
   );
 
   return server;
+}
+
+function isRetrievalAuditUnavailableError(
+  error: unknown,
+): error is Error & { code: typeof RETRIEVAL_AUDIT_BUSY_CODE } {
+  return error instanceof Error &&
+    (error as Error & { code?: unknown }).code === RETRIEVAL_AUDIT_BUSY_CODE;
 }

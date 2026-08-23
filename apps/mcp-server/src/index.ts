@@ -1,6 +1,10 @@
 export {
+  CLIENT_KIND_ENVIRONMENT_VARIABLE,
   VAULT_ENVIRONMENT_VARIABLE,
+  resolveClientKind,
   resolveVaultPath,
+  type ClientKindOptions,
+  type OwnContextMcpClientKind,
   type VaultPathOptions,
 } from "./config.js";
 export {

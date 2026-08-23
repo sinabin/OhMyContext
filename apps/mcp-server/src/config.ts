@@ -3,6 +3,7 @@ import { posix, win32 } from "node:path";
 
 const VAULT_ENVIRONMENT_VARIABLE = "OWNCONTEXT_VAULT_PATH";
 const ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE = "OWNCONTEXT_ALLOWED_COLLECTION";
+const CLIENT_KIND_ENVIRONMENT_VARIABLE = "OWNCONTEXT_CLIENT_KIND";
 
 type SupportedPlatform = NodeJS.Platform;
 
@@ -13,6 +14,12 @@ export type VaultPathOptions = {
 };
 
 export type AllowedCollectionOptions = {
+  env?: Readonly<Record<string, string | undefined>>;
+};
+
+export type OwnContextMcpClientKind = "codex" | "claude-code";
+
+export type ClientKindOptions = {
   env?: Readonly<Record<string, string | undefined>>;
 };
 
@@ -113,7 +120,25 @@ export function resolveAllowedCollection(
   return collection;
 }
 
+/**
+ * Resolves the trusted client identity fixed by the desktop-generated launch.
+ * Tool input cannot select or override this value.
+ */
+export function resolveClientKind(
+  options: ClientKindOptions = {},
+): OwnContextMcpClientKind {
+  const env = options.env ?? process.env;
+  const clientKind = env[CLIENT_KIND_ENVIRONMENT_VARIABLE]?.trim();
+  if (clientKind !== "codex" && clientKind !== "claude-code") {
+    throw new Error(
+      `${CLIENT_KIND_ENVIRONMENT_VARIABLE} must be codex or claude-code.`,
+    );
+  }
+  return clientKind;
+}
+
 export {
   ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE,
+  CLIENT_KIND_ENVIRONMENT_VARIABLE,
   VAULT_ENVIRONMENT_VARIABLE,
 };

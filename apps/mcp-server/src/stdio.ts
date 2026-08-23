@@ -1,7 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { resolveAllowedCollection, resolveVaultPath } from "./config.js";
+import {
+  resolveAllowedCollection,
+  resolveClientKind,
+  resolveVaultPath,
+} from "./config.js";
 import { createOwnContextServer } from "./server.js";
 
 /**
@@ -14,6 +18,7 @@ import { createOwnContextServer } from "./server.js";
 export async function runStdioServer(): Promise<void> {
   const vaultPath = resolveVaultPath();
   const allowedCollection = resolveAllowedCollection();
+  const clientKind = resolveClientKind();
   mkdirSync(dirname(vaultPath), { recursive: true });
 
   const {
@@ -42,6 +47,7 @@ export async function runStdioServer(): Promise<void> {
     const server = createOwnContextServer(vault, {
       api: { fetchDocument, searchVault },
       allowedCollection,
+      clientKind,
     });
     const transport = new StdioServerTransport();
     await server.connect(transport);

@@ -13,13 +13,17 @@ export type {
   VaultStorageValue,
 } from "./storage.js";
 export {
+  clearRetrievalActivity,
   commitPreparedDirectoryImport,
   DirectoryImportScopeChangedError,
+  RetrievalAuditUnavailableError,
   fetchDocument,
   importDirectory,
   importOwnContextSampleLibrary,
   listDeletionReceipts,
+  listRetrievalActivity,
   listSources,
+  MAX_RETRIEVAL_ACTIVITY_RESULTS,
   openVault,
   prepareDirectoryImport,
   prepareSourcePurge,
@@ -28,6 +32,7 @@ export {
   searchVault,
   verifyDeletionReceipt,
 } from "./vault.js";
+export { MAX_RETRIEVAL_ACTIVITY_ROWS } from "./schema.js";
 export {
   OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
@@ -55,10 +60,16 @@ export type {
   ImportedDocument,
   ImportIssue,
   ImportIssueCode,
+  ListRetrievalActivityOptions,
   PreparedDirectoryImport,
   PrepareSourcePurgeResult,
   PurgeSourceInput,
   PurgeSourceResult,
+  RetrievalActivityClientKind,
+  RetrievalActivityEntry,
+  RetrievalActivityEventType,
+  RetrievalAuditContext,
+  RetrievalClientKind,
   SearchVaultInput,
   SourcePurgePreview,
   Vault,

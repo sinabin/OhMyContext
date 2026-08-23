@@ -10,6 +10,7 @@ import type {
   FetchResponse,
   ImportProgress,
   PrepareDirectoryImportResponse,
+  RetrievalActivityEntry,
   SourcePurgePreview,
   VaultSource,
 } from "../electron/preload.cjs";
@@ -25,7 +26,7 @@ interface Result {
   modifiedAt: string;
 }
 
-type View = "library" | "connections";
+type View = "library" | "connections" | "history";
 type Activity = "preflight" | "import" | "search" | "purge";
 
 interface ImportCountSummary {
@@ -81,6 +82,8 @@ function codexConnectionStatus(preview: CodexConnectionPreview | undefined): str
   switch (preview.status) {
     case "managed":
       return "Configuration saved by OwnContext";
+    case "managed_stale":
+      return "OwnContext update required for this Codex connection";
     case "absent":
       return "Ready to connect";
     case "unmanaged_conflict":
@@ -235,6 +238,11 @@ export function App() {
   const [hasSearched, setHasSearched] = useState(false);
   const [sources, setSources] = useState<VaultSource[]>([]);
   const [receipts, setReceipts] = useState<DeletionReceiptView[]>([]);
+  const [retrievalActivity, setRetrievalActivity] = useState<RetrievalActivityEntry[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyNotice, setHistoryNotice] = useState(
+    "This local history records request metadata only, never queries or document content.",
+  );
   const [activity, setActivity] = useState<Activity>();
   const [progress, setProgress] = useState<ImportProgress>();
   const [directoryImportPreflight, setDirectoryImportPreflight] = useState<
@@ -268,6 +276,19 @@ export function App() {
     setReceipts(response.receipts);
   }
 
+  async function refreshRetrievalActivity() {
+    const response = await window.ownContext.listRetrievalActivity();
+    setRetrievalActivity(response.entries);
+  }
+
+  async function refreshRetrievalActivityAfterRequest() {
+    try {
+      await refreshRetrievalActivity();
+    } catch {
+      setHistoryNotice("A request completed, but the local history could not be refreshed yet.");
+    }
+  }
+
   async function refreshCodexConnection() {
     const response = await window.ownContext.previewCodexConnection();
     setCodexConnection(response);
@@ -284,6 +305,7 @@ export function App() {
       window.ownContext.getStatus().then((value) => setStatus(value.mode)),
       refreshSources(),
       refreshReceipts(),
+      refreshRetrievalActivity(),
       refreshCodexConnection(),
       refreshClaudeCodeConnection(),
     ]).catch((reason: unknown) => setError(String(reason)));
@@ -297,6 +319,8 @@ export function App() {
         // Preview only. Merely opening the screen must not execute a PATH command.
         refreshClaudeCodeConnection(),
       ]).catch((reason: unknown) => setError(String(reason)));
+    } else if (view === "history") {
+      void refreshRetrievalActivity().catch((reason: unknown) => setError(String(reason)));
     }
   }, [view]);
 
@@ -497,6 +521,7 @@ export function App() {
     } catch (reason) {
       setError(String(reason));
     } finally {
+      await refreshRetrievalActivityAfterRequest();
       setActivity(undefined);
     }
   }
@@ -508,6 +533,8 @@ export function App() {
       setSelected(response ?? undefined);
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      await refreshRetrievalActivityAfterRequest();
     }
   }
 
@@ -547,7 +574,7 @@ export function App() {
         setNotice(
           `Source removed from OwnContext · receipt ${response.receipt.receiptId.slice(0, 12)}…`,
         );
-        await Promise.all([refreshSources(), refreshReceipts()]);
+        await Promise.all([refreshSources(), refreshReceipts(), refreshRetrievalActivity()]);
       } else if (response.status === "canceled") {
         setPurgePreview(undefined);
         setNotice("Removal canceled. The source remains in OwnContext.");
@@ -602,6 +629,39 @@ export function App() {
     }
   }
 
+  async function clearHistory() {
+    setHistoryBusy(true);
+    setError(undefined);
+    try {
+      const response = await window.ownContext.clearRetrievalActivity();
+      if (response.status === "cleared") {
+        await refreshRetrievalActivity();
+        setHistoryNotice(
+          `${response.deleted} local request entr${response.deleted === 1 ? "y" : "ies"} cleared. External copies, if any, were not changed.`,
+        );
+      } else {
+        setHistoryNotice("Clear canceled. Local access history was not changed.");
+      }
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  async function refreshHistoryManually() {
+    setHistoryBusy(true);
+    setError(undefined);
+    try {
+      await refreshRetrievalActivity();
+      setHistoryNotice("Local access history refreshed. External requests do not appear live.");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
   const isFolderWork = activity === "preflight" || activity === "import";
 
   return (
@@ -630,7 +690,13 @@ export function App() {
           >
             AI connections
           </button>
-          <button className="nav-item" type="button" disabled>Access history · next</button>
+          <button
+            className={`nav-item ${view === "history" ? "active" : ""}`}
+            type="button"
+            onClick={() => setView("history")}
+          >
+            Access history
+          </button>
         </nav>
 
         <div className="trust-note">
@@ -646,12 +712,18 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">
-              {view === "library" ? "LOCAL PERSONAL CONTEXT" : "CONTROLLED AI ACCESS"}
+              {view === "library"
+                ? "LOCAL PERSONAL CONTEXT"
+                : view === "connections"
+                  ? "CONTROLLED AI ACCESS"
+                  : "DISCLOSURE ACTIVITY"}
             </p>
             <h1>
               {view === "library"
                 ? "Find the source behind your memory."
-                : "Connect context without surrendering the vault."}
+                : view === "connections"
+                  ? "Connect context without surrendering the vault."
+                  : "See when context stayed local or could reach AI."}
             </h1>
           </div>
           {view === "library" ? (
@@ -673,12 +745,26 @@ export function App() {
         </header>
 
         <section className="boundary" aria-label="Current data boundary">
-          <span>{view === "library" ? "Current mode" : "Transfer boundary"}</span>
-          <strong>{view === "library" ? status : "Local retrieval · returned context may leave"}</strong>
+          <span>
+            {view === "library"
+              ? "Current mode"
+              : view === "connections"
+                ? "Transfer boundary"
+                : "History boundary"}
+          </span>
+          <strong>
+            {view === "library"
+              ? status
+              : view === "connections"
+                ? "Local retrieval · returned context may leave"
+                : "Content-free local log"}
+          </strong>
           <p>
             {view === "library"
               ? "Files and the index stay on this device. Returned text and provenance metadata can leave it when an authorized cloud AI requests context."
-              : "An enabled AI client receives bounded text and provenance metadata from its allowed collection. Its configured model provider may process them outside this device."}
+              : view === "connections"
+                ? "An enabled AI client receives bounded text and provenance metadata from its allowed collection. Its configured model provider may process them outside this device."
+                : "This screen never reveals queries, excerpts, titles, document identifiers, or file paths."}
           </p>
         </section>
 
@@ -716,7 +802,7 @@ export function App() {
             onOpenConnections={() => setView("connections")}
             onCloseSelected={() => setSelected(undefined)}
           />
-        ) : (
+        ) : view === "connections" ? (
           <ConnectionsView
             codexBusy={codexConnectionBusy}
             codexNotice={codexConnectionNotice}
@@ -728,6 +814,14 @@ export function App() {
             onRemoveCodex={() => mutateCodexConnection("remove")}
             onApplyClaudeCode={() => mutateClaudeCodeConnection("apply")}
             onRemoveClaudeCode={() => mutateClaudeCodeConnection("remove")}
+          />
+        ) : (
+          <AccessHistoryView
+            entries={retrievalActivity}
+            busy={historyBusy}
+            notice={historyNotice}
+            onClear={clearHistory}
+            onRefresh={refreshHistoryManually}
           />
         )}
       </main>
@@ -1202,6 +1296,131 @@ function LibraryView(props: LibraryViewProps) {
   );
 }
 
+interface AccessHistoryViewProps {
+  entries: RetrievalActivityEntry[];
+  busy: boolean;
+  notice: string;
+  onClear: () => void;
+  onRefresh: () => void;
+}
+
+function retrievalClientLabel(clientKind: RetrievalActivityEntry["clientKind"]): string {
+  switch (clientKind) {
+    case "desktop":
+      return "OwnContext desktop";
+    case "codex":
+      return "Launch-declared Codex";
+    case "claude-code":
+      return "Launch-declared Claude Code";
+    case "legacy":
+      return "Earlier OwnContext version";
+  }
+}
+
+function retrievalBoundary(entry: RetrievalActivityEntry): string {
+  switch (entry.clientKind) {
+    case "desktop":
+      return "Handled inside the desktop app.";
+    case "codex":
+      return "The MCP launch declared Codex; returned data may have been handled by another process or provider.";
+    case "claude-code":
+      return "The MCP launch declared Claude Code; returned data may have been handled by another process or provider.";
+    case "legacy":
+      return "The client was not recorded by the earlier vault schema.";
+  }
+}
+
+function AccessHistoryView(props: AccessHistoryViewProps) {
+  return (
+    <section className="workspace access-history">
+      <div className="section-heading history-heading">
+        <div>
+          <p className="eyebrow">LOCAL TRANSPARENCY LOG</p>
+          <h2>Review how each request was launch-attributed.</h2>
+        </div>
+        <div className="history-actions">
+          <button
+            className="secondary"
+            type="button"
+            disabled={props.busy}
+            onClick={props.onRefresh}
+          >
+            {props.busy ? "Working…" : "Refresh history"}
+          </button>
+          <button
+            className="secondary danger-text"
+            type="button"
+            disabled={props.busy || props.entries.length === 0}
+            onClick={props.onClear}
+          >
+            Clear local history
+          </button>
+        </div>
+      </div>
+
+      <div className="history-boundary-grid">
+        <article>
+          <span className="history-kind local">LOCAL</span>
+          <strong>OwnContext desktop</strong>
+          <p>Search previews and opened context stay inside this app.</p>
+        </article>
+        <article>
+          <span className="history-kind external">MAY LEAVE DEVICE</span>
+          <strong>Codex or Claude Code declaration</strong>
+          <p>The launch label is not an authenticated client identity. Returned data may be processed externally.</p>
+        </article>
+        <article>
+          <span className="history-kind legacy">UNKNOWN CLIENT</span>
+          <strong>Earlier vault entries</strong>
+          <p>Older records lack a client label; request grouping may be split if earlier purges removed rows.</p>
+        </article>
+      </div>
+
+      <div className="history-privacy-note">
+        <strong>What this screen excludes</strong>
+        <p>
+          It does not reveal your query, document text, snippets, titles, document or chunk IDs, or
+          file paths. Each displayed entry contains only time, request type, client, and result count.
+          The vault keeps opaque document/chunk linkage only so removing a source can also remove its
+          linked audit rows. External-client labels are managed-launch metadata, not authenticated
+          identities or proof that a named client or provider received or retained data. This view
+          does not live-update for external requests; select Refresh history after using an AI client.
+        </p>
+      </div>
+
+      <p className="session-notice history-notice" aria-live="polite">{props.notice}</p>
+
+      {props.entries.length === 0 ? (
+        <div className="empty history-empty">
+          <span>NO RECORDED REQUESTS</span>
+          <h3>Access history is empty</h3>
+          <p>Search locally or use a connected AI client to create a content-free entry.</p>
+        </div>
+      ) : (
+        <div className="history-list" aria-label="Recent access history">
+          {props.entries.map((entry) => (
+            <article className="history-entry" key={entry.requestId}>
+              <div className="history-entry-main">
+                <span className={`history-client ${entry.clientKind}`}>
+                  {retrievalClientLabel(entry.clientKind)}
+                </span>
+                <strong>{entry.eventType === "search" ? "Search response" : "Document context fetch"}</strong>
+                <p>{retrievalBoundary(entry)}</p>
+              </div>
+              <div className="history-entry-meta">
+                <time>{new Date(entry.occurredAt).toLocaleString()}</time>
+                <span>
+                  {entry.resultCount} result{entry.resultCount === 1 ? "" : "s"}
+                </span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 interface ConnectionsViewProps {
   codexBusy: boolean;
   codexNotice: string;
@@ -1217,6 +1436,7 @@ interface ConnectionsViewProps {
 
 function ConnectionsView(props: ConnectionsViewProps) {
   const codexManaged = props.codexPreview?.status === "managed";
+  const codexRegistered = codexManaged || props.codexPreview?.status === "managed_stale";
   const claudeCodeManaged = props.claudeCodePreview?.status === "managed";
   const claudeCodeRegistered =
     claudeCodeManaged || props.claudeCodePreview?.status === "managed_stale";
@@ -1265,9 +1485,10 @@ function ConnectionsView(props: ConnectionsViewProps) {
           <p>
             Installing OwnContext does not connect Codex. Updates refresh the connection only
             while this marked block is already managed. A timestamped backup is created before an
-            existing file changes. Restart Codex after applying or updating. The AI client or
-            provider may receive returned excerpts and provenance metadata, including titles,
-            source paths, timestamps, and stable document IDs.
+            existing file changes. Restart Codex after applying a connection change or updating
+            OwnContext; an older running MCP process fails closed if the vault schema changed. The
+            AI client or provider may receive returned excerpts and provenance metadata, including
+            titles, source paths, timestamps, and stable document IDs.
           </p>
         </div>
 
@@ -1278,7 +1499,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.codexBusy || !props.codexPreview?.canApply}
             onClick={props.onApplyCodex}
           >
-            {props.codexBusy ? "Working…" : codexManaged ? "Update connection" : "Connect Codex"}
+            {props.codexBusy ? "Working…" : codexRegistered ? "Update connection" : "Connect Codex"}
           </button>
           <button
             className="secondary danger-text"
@@ -1329,8 +1550,10 @@ function ConnectionsView(props: ConnectionsViewProps) {
           <p>
             Clicking connect runs Claude Code's user-scope MCP command after creating a backup
             when a configuration already exists. Restart active Claude Code sessions after a
-            change. The AI client or provider may receive returned excerpts and provenance
-            metadata, including titles, source paths, timestamps, and stable document IDs.
+            connection change or an OwnContext app update; an older running MCP process fails
+            closed if the vault schema changed. The AI client or provider may receive returned
+            excerpts and provenance metadata, including titles, source paths, timestamps, and
+            stable document IDs.
           </p>
         </div>
 

@@ -290,6 +290,9 @@ async function runGuiSmoke(executable, temporaryRoot) {
     result.codexConnectionCardReady !== true ||
     result.claudeCodeConnectionCardReady !== true ||
     result.externalTransferBoundaryVisible !== true ||
+    result.accessHistoryScreenReady !== true ||
+    result.desktopHistoryEntryReady !== true ||
+    result.contentFreeHistoryBoundaryVisible !== true ||
     !Number.isInteger(result.resultCardCount) ||
     result.resultCardCount < 1 ||
     result.resultCardCount > 12
@@ -519,6 +522,7 @@ try {
       ELECTRON_RUN_AS_NODE: "1",
       NODE_NO_WARNINGS: "1",
       OWNCONTEXT_ALLOWED_COLLECTION: "packaged-smoke",
+      OWNCONTEXT_CLIENT_KIND: "codex",
       OWNCONTEXT_VAULT_PATH: vaultPath,
     },
     stderr: "pipe",
