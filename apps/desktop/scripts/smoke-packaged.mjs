@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   lstat,
+  open,
   readdir,
   readFile,
   rm,
@@ -29,6 +30,14 @@ import {
   isPackagedKeyStorageSmokeResult,
 } from "../../../scripts/key-storage-evidence-policy.mjs";
 import { verifyCompliance } from "../../../scripts/release-compliance.mjs";
+import {
+  ENCRYPTED_VAULT_SMOKE_ARGUMENT,
+  ENCRYPTED_VAULT_SMOKE_MAX_RESULT_BYTES,
+  ENCRYPTED_VAULT_SMOKE_NONCE_ENVIRONMENT_NAME,
+  ENCRYPTED_VAULT_SMOKE_RESULT_FILE_NAME,
+  ENCRYPTED_VAULT_SMOKE_ROOT_ENVIRONMENT_NAME,
+  isEncryptedVaultSmokeResult,
+} from "../dist-electron/encrypted-vault-smoke.js";
 import {
   FORGE_BUILD_ID_ENV,
   validateForgeBuildIdentifier,
@@ -207,6 +216,69 @@ async function sha256File(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
 }
 
+async function readStableBoundedFile(path, maximumBytes) {
+  const before = await lstat(path, { bigint: true });
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    before.nlink !== 1n ||
+    before.size < 1n ||
+    before.size > BigInt(maximumBytes)
+  ) {
+    throw new Error("Packaged smoke evidence is not a bounded regular file.");
+  }
+  const handle = await open(path, "r");
+  const bytes = Buffer.alloc(Number(before.size));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size !== before.size
+    ) {
+      throw new Error("Packaged smoke evidence changed before reading.");
+    }
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        offset,
+        bytes.byteLength - offset,
+        offset,
+      );
+      if (bytesRead <= 0) throw new Error("Packaged smoke evidence was truncated.");
+      offset += bytesRead;
+    }
+    const afterRead = await handle.stat({ bigint: true });
+    if (
+      afterRead.dev !== opened.dev ||
+      afterRead.ino !== opened.ino ||
+      afterRead.size !== opened.size
+    ) {
+      throw new Error("Packaged smoke evidence changed while reading.");
+    }
+  } catch (error) {
+    bytes.fill(0);
+    throw error;
+  } finally {
+    await handle.close();
+  }
+  const after = await lstat(path, { bigint: true });
+  if (
+    after.isSymbolicLink() ||
+    !after.isFile() ||
+    after.nlink !== 1n ||
+    after.dev !== before.dev ||
+    after.ino !== before.ino ||
+    after.size !== before.size
+  ) {
+    bytes.fill(0);
+    throw new Error("Packaged smoke evidence changed after reading.");
+  }
+  return bytes;
+}
+
 async function inventoryPackagedFiles(root) {
   const files = [];
   const directories = [root];
@@ -358,6 +430,69 @@ async function runWindowsKeyStorageSmoke(executable, temporaryRoot) {
   return result;
 }
 
+async function runWindowsEncryptedVaultSmoke(executable, temporaryRoot) {
+  const smokeRoot = resolve(temporaryRoot, "windows-encrypted-vault");
+  await mkdir(smokeRoot);
+  const nonce = randomUUID();
+  const environment = { ...process.env };
+  delete environment.ELECTRON_RUN_AS_NODE;
+  environment[ENCRYPTED_VAULT_SMOKE_ROOT_ENVIRONMENT_NAME] = smokeRoot;
+  environment[ENCRYPTED_VAULT_SMOKE_NONCE_ENVIRONMENT_NAME] = nonce;
+
+  const child = spawn(executable, [ENCRYPTED_VAULT_SMOKE_ARGUMENT], {
+    cwd: dirname(executable),
+    env: environment,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  await new Promise((resolvePromise, rejectPromise) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 60_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectPromise(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (!timedOut && code === 0) {
+        resolvePromise();
+        return;
+      }
+      rejectPromise(new Error(
+        timedOut
+          ? "Packaged Windows encrypted-vault smoke timed out."
+          : `Packaged Windows encrypted-vault smoke failed (${signal ?? String(code)}).`,
+      ));
+    });
+  });
+
+  const resultPath = resolve(smokeRoot, ENCRYPTED_VAULT_SMOKE_RESULT_FILE_NAME);
+  const bytes = await readStableBoundedFile(
+    resultPath,
+    ENCRYPTED_VAULT_SMOKE_MAX_RESULT_BYTES,
+  );
+  try {
+    const result = JSON.parse(bytes.toString("utf8"));
+    const canonical = Buffer.from(`${JSON.stringify(result)}\n`, "utf8");
+    try {
+      if (
+        !bytes.equals(canonical) ||
+        !isEncryptedVaultSmokeResult(result, nonce)
+      ) {
+        throw new Error("Packaged Windows encrypted-vault evidence is invalid.");
+      }
+      return result;
+    } finally {
+      canonical.fill(0);
+    }
+  } finally {
+    bytes.fill(0);
+  }
+}
+
 async function writeWindowsKeyStorageEvidence(buildDirectory, result) {
   const evidence = {
     schemaVersion: 2,
@@ -507,6 +642,7 @@ const fixtureDirectory = resolve(temporaryRoot, "fixture-source");
 const fixtureToken = "packagedfixturetoken";
 
 try {
+  await runWindowsEncryptedVaultSmoke(executable, temporaryRoot);
   const keyStorageResult = await runWindowsKeyStorageSmoke(
     executable,
     temporaryRoot,

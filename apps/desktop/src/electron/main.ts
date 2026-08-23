@@ -52,6 +52,10 @@ import {
   runKeyStorageSmoke,
 } from "./key-storage-smoke.js";
 import {
+  prepareEncryptedVaultSmoke,
+  runEncryptedVaultSmoke,
+} from "./encrypted-vault-smoke.js";
+import {
   prepareGuiSmoke,
   runGuiSmokeJourney,
   writeGuiSmokeSuccess,
@@ -643,6 +647,26 @@ app.setAppUserModelId(
 );
 
 async function bootstrap(): Promise<void> {
+  const encryptedVaultSmoke = prepareEncryptedVaultSmoke();
+  if (encryptedVaultSmoke) {
+    app.setPath("userData", encryptedVaultSmoke.userDataPath);
+    // Keep this normal-Electron verification in the main process so the
+    // packaged run exercises async safeStorage and the shipped native module.
+    void app.whenReady()
+      .then(() => runEncryptedVaultSmoke(
+        encryptedVaultSmoke,
+        safeStorage,
+        app.isPackaged,
+        process.resourcesPath,
+      ))
+      .then(() => app.exit(0))
+      .catch(() => {
+        process.stderr.write("OwnContext encrypted-vault verification failed.\n");
+        app.exit(1);
+      });
+    return;
+  }
+
   const keyStorageSmoke = prepareKeyStorageSmoke();
   if (keyStorageSmoke) {
     app.setPath("userData", keyStorageSmoke.userDataPath);
