@@ -11,6 +11,7 @@ import {
   openVault,
   type EncryptedVaultCandidateErrorCode,
   type EncryptedVaultCandidateProvider,
+  type EncryptedVaultCandidateSession,
   type EncryptedVaultCipherAttestation,
   type EncryptedVaultOpenMode,
   type EncryptedVaultStorageDescriptor,
@@ -534,5 +535,182 @@ describe("encrypted vault candidate boundary", () => {
     expect(connectionReads).toBe(1);
     expect(closeReads).toBe(1);
     expect(closes).toBe(1);
+  });
+
+  it("captures session operation getters once and preserves their original receiver", async () => {
+    const root = await temporaryRoot();
+    const databasePath = join(root, "one-shot-session-operations.sqlite");
+    const plaintext = createNodeSqliteDevelopmentStorageProvider();
+    const base = plaintext.open(":memory:");
+    let attestReads = 0;
+    let inspectReads = 0;
+    let attestCalls = 0;
+    let inspectCalls = 0;
+    let closes = 0;
+    const trace: string[] = [];
+    let session: EncryptedVaultCandidateSession;
+    session = {
+      connection: {
+        close() {
+          closes += 1;
+          base.close();
+        },
+        exec(sql) {
+          base.exec(sql);
+        },
+        prepare(sql) {
+          return base.prepare(sql);
+        },
+      },
+      get attestCipher() {
+        trace.push("read-attest");
+        attestReads += 1;
+        if (attestReads > 1) throw new Error("secret:second-attest-read");
+        return function (this: EncryptedVaultCandidateSession) {
+          trace.push("call-attest");
+          expect(this).toBe(session);
+          attestCalls += 1;
+          return { status: "active" as const };
+        };
+      },
+      get inspectSchemaVersion() {
+        trace.push("read-inspect");
+        inspectReads += 1;
+        if (inspectReads > 1) throw new Error("secret:second-inspect-read");
+        return function (this: EncryptedVaultCandidateSession) {
+          trace.push("call-inspect");
+          expect(this).toBe(session);
+          inspectCalls += 1;
+          return 0;
+        };
+      },
+    };
+    const provider: EncryptedVaultCandidateProvider = {
+      descriptor: CANDIDATE_DESCRIPTOR,
+      openKeyed() {
+        return session;
+      },
+    };
+
+    const vault = openEncryptedVaultCandidate(databasePath, provider, {
+      key: Buffer.alloc(ENCRYPTED_VAULT_KEY_BYTES, 0xe7),
+      mode: "create-exclusive",
+    });
+    openVaults.push(vault);
+
+    expect(attestReads).toBe(1);
+    expect(inspectReads).toBe(1);
+    expect(attestCalls).toBe(1);
+    expect(inspectCalls).toBe(1);
+    expect(closes).toBe(0);
+    expect(trace).toEqual([
+      "read-attest",
+      "call-attest",
+      "read-inspect",
+      "call-inspect",
+    ]);
+  });
+
+  it("closes without invoking either operation when a session getter throws", async () => {
+    const root = await temporaryRoot();
+    const databasePath = join(root, "throwing-session-getter.sqlite");
+    let closes = 0;
+    const provider: EncryptedVaultCandidateProvider = {
+      descriptor: CANDIDATE_DESCRIPTOR,
+      openKeyed() {
+        return {
+          connection: {
+            close() {
+              closes += 1;
+            },
+            exec() {
+              throw new Error("must not initialize");
+            },
+            prepare() {
+              throw new Error("must not inspect");
+            },
+          },
+          get attestCipher() {
+            throw new Error("secret:attest-getter");
+          },
+          inspectSchemaVersion() {
+            throw new Error("must not inspect");
+          },
+        } as unknown as EncryptedVaultCandidateSession;
+      },
+    };
+
+    expectCandidateError(
+      () => openEncryptedVaultCandidate(databasePath, provider, {
+        key: Buffer.alloc(ENCRYPTED_VAULT_KEY_BYTES, 0xf1),
+        mode: "create-exclusive",
+      }),
+      "OPEN_FAILED",
+      ["secret:attest-getter", databasePath],
+    );
+    expect(closes).toBe(1);
+  });
+
+  it("attests before reading an inspect getter and maps its failure without schema access", async () => {
+    const root = await temporaryRoot();
+    const databasePath = join(root, "throwing-inspect-getter.sqlite");
+    const trace: string[] = [];
+    const provider: EncryptedVaultCandidateProvider = {
+      descriptor: CANDIDATE_DESCRIPTOR,
+      openKeyed() {
+        return {
+          connection: tracedConnection(trace),
+          attestCipher() {
+            trace.push("attest-cipher");
+            return { status: "active" as const };
+          },
+          get inspectSchemaVersion() {
+            trace.push("read-inspect");
+            throw new Error("secret:inspect-getter");
+          },
+        } as unknown as EncryptedVaultCandidateSession;
+      },
+    };
+
+    expectCandidateError(
+      () => openEncryptedVaultCandidate(databasePath, provider, {
+        key: Buffer.alloc(ENCRYPTED_VAULT_KEY_BYTES, 0xf2),
+        mode: "create-exclusive",
+      }),
+      "SCHEMA_INSPECTION_FAILED",
+      ["secret:inspect-getter", databasePath],
+    );
+    expect(trace).toEqual(["attest-cipher", "read-inspect", "close"]);
+  });
+
+  it("does not read session operation getters when the connection is invalid", async () => {
+    const root = await temporaryRoot();
+    const databasePath = join(root, "invalid-connection-before-operations.sqlite");
+    let operationReads = 0;
+    const provider: EncryptedVaultCandidateProvider = {
+      descriptor: CANDIDATE_DESCRIPTOR,
+      openKeyed() {
+        return {
+          connection: {},
+          get attestCipher() {
+            operationReads += 1;
+            return () => ({ status: "active" as const });
+          },
+          get inspectSchemaVersion() {
+            operationReads += 1;
+            return () => 0;
+          },
+        } as unknown as EncryptedVaultCandidateSession;
+      },
+    };
+
+    expectCandidateError(
+      () => openEncryptedVaultCandidate(databasePath, provider, {
+        key: Buffer.alloc(ENCRYPTED_VAULT_KEY_BYTES, 0xf3),
+        mode: "create-exclusive",
+      }),
+      "OPEN_FAILED",
+    );
+    expect(operationReads).toBe(0);
   });
 });

@@ -418,13 +418,18 @@ export function openEncryptedVaultCandidate(
 
   const capturedConnection = captureCandidateConnection(session);
   const db = capturedConnection.connection;
-  if (!db || !hasCandidateSessionMethods(session)) {
+  if (!db) {
+    closeCandidateConnection(capturedConnection.close);
+    throw new EncryptedVaultCandidateError("OPEN_FAILED");
+  }
+  const attestCipher = captureCandidateSessionMethod(session, "attestCipher");
+  if (!attestCipher) {
     closeCandidateConnection(capturedConnection.close);
     throw new EncryptedVaultCandidateError("OPEN_FAILED");
   }
 
   try {
-    const attestation = session.attestCipher();
+    const attestation = attestCipher();
     if (!isActiveCipherAttestation(attestation)) {
       throw new Error("Cipher is not active.");
     }
@@ -434,11 +439,15 @@ export function openEncryptedVaultCandidate(
   }
 
   let inspectedSchemaVersion: number;
+  const inspectSchemaVersion = captureCandidateSessionMethod(
+    session,
+    "inspectSchemaVersion",
+  );
   try {
-    if (typeof session.inspectSchemaVersion !== "function") {
+    if (!inspectSchemaVersion) {
       throw new Error("Schema inspection is unavailable.");
     }
-    inspectedSchemaVersion = session.inspectSchemaVersion();
+    inspectedSchemaVersion = inspectSchemaVersion() as number;
     assertSupportedSchemaVersion(inspectedSchemaVersion);
   } catch {
     closeCandidateConnection(capturedConnection.close);
@@ -553,15 +562,24 @@ function captureCandidateConnection(
   return Object.freeze({ connection: facade, close });
 }
 
-function hasCandidateSessionMethods(session: unknown): boolean {
+function captureCandidateSessionMethod(
+  session: unknown,
+  methodName: "attestCipher" | "inspectSchemaVersion",
+): (() => unknown) | undefined {
   try {
-    return typeof session === "object" &&
-      session !== null &&
-      !Array.isArray(session) &&
-      typeof (session as { attestCipher?: unknown }).attestCipher === "function" &&
-      typeof (session as { inspectSchemaVersion?: unknown }).inspectSchemaVersion === "function";
+    if (
+      typeof session !== "object" ||
+      session === null ||
+      Array.isArray(session)
+    ) {
+      return undefined;
+    }
+    const candidate = session as Record<string, unknown>;
+    const method = candidate[methodName];
+    if (typeof method !== "function") return undefined;
+    return () => Reflect.apply(method, session, []);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
