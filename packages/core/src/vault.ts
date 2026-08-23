@@ -1,0 +1,837 @@
+import { constants } from "node:fs";
+import {
+  lstat,
+  open,
+  opendir,
+  realpath,
+} from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { chunkDocument, normalizeText, titleFromText } from "./chunking.js";
+import { assertHashId, contentHash, deterministicId } from "./ids.js";
+import { initializeSchema } from "./schema.js";
+import type {
+  FetchDocumentInput,
+  FetchedChunk,
+  ImportDirectoryOptions,
+  ImportDirectoryResult,
+  ImportIssue,
+  ImportedDocument,
+  SearchVaultInput,
+  Vault,
+  VaultFetchResult,
+  VaultSearchResult,
+} from "./types.js";
+
+const DEFAULT_COLLECTION = "default";
+const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_FILES = 10_000;
+const DEFAULT_CHUNK_SIZE = 1_400;
+const DEFAULT_SEARCH_LIMIT = 10;
+const MAX_SEARCH_LIMIT = 50;
+const DEFAULT_NEIGHBORS = 1;
+const MAX_NEIGHBORS = 5;
+const DEFAULT_FETCH_CHARS = 12_000;
+const MAX_FETCH_CHARS = 50_000;
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+interface VaultState {
+  db: DatabaseSync;
+  closed: boolean;
+  importingSources: Set<string>;
+}
+
+interface CandidateFile {
+  absolutePath: string;
+  relativePath: string;
+}
+
+interface PreparedFile extends CandidateFile {
+  content: string;
+  contentHash: string;
+  createdAt: string;
+  modifiedAt: string;
+  sourceUri: string;
+  title: string;
+}
+
+interface DocumentRow {
+  id: string;
+  current_revision_id: string | null;
+  content_hash: string | null;
+  ordinal: number | null;
+}
+
+interface SearchRow {
+  document_id: string;
+  chunk_id: string;
+  title: string;
+  snippet: string;
+  source_uri: string;
+  created_at: string;
+  modified_at: string;
+  score: number;
+}
+
+interface FetchRow {
+  document_id: string;
+  chunk_id: string;
+  chunk_index: number;
+  heading_path: string;
+  content: string;
+  title: string;
+  source_uri: string;
+  created_at: string;
+  modified_at: string;
+}
+
+const states = new WeakMap<Vault, VaultState>();
+
+class VaultHandle implements Vault {
+  public readonly path: string;
+
+  public constructor(path: string, db: DatabaseSync) {
+    this.path = path;
+    states.set(this, { db, closed: false, importingSources: new Set() });
+  }
+
+  public close(): void {
+    const state = states.get(this);
+    if (!state || state.closed) return;
+    state.db.close();
+    state.closed = true;
+  }
+}
+
+export function openVault(dbPath: string): Vault {
+  if (typeof dbPath !== "string" || dbPath.trim().length === 0) {
+    throw new TypeError("dbPath must be a non-empty path or :memory:");
+  }
+  const resolvedPath = dbPath === ":memory:" ? dbPath : resolve(dbPath);
+  if (resolvedPath !== ":memory:") {
+    mkdirSync(dirname(resolvedPath), { recursive: true });
+  }
+  const db = new DatabaseSync(resolvedPath);
+  try {
+    initializeSchema(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return new VaultHandle(resolvedPath, db);
+}
+
+export async function importDirectory(
+  vault: Vault,
+  directoryPath: string,
+  options: ImportDirectoryOptions = {},
+): Promise<ImportDirectoryResult> {
+  const state = stateFor(vault);
+  const db = state.db;
+  const collection = boundedText(options.collection ?? DEFAULT_COLLECTION, "collection", 128);
+  const maxFileBytes = boundedInteger(
+    options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+    "maxFileBytes",
+    1,
+    1024 * 1024 * 1024,
+  );
+  const maxFiles = boundedInteger(
+    options.maxFiles ?? DEFAULT_MAX_FILES,
+    "maxFiles",
+    1,
+    1_000_000,
+  );
+  const chunkSize = boundedInteger(
+    options.chunkSize ?? DEFAULT_CHUNK_SIZE,
+    "chunkSize",
+    64,
+    100_000,
+  );
+  const root = await safeRoot(directoryPath);
+  const rootUri = directoryUri(root);
+  const sourceName = boundedText(
+    options.sourceName ?? (basename(root) || root),
+    "sourceName",
+    512,
+  );
+  const sourceId = deterministicId("source", "folder", rootUri, collection);
+  if (state.importingSources.size > 0) {
+    throw new Error("Another import is already running for this vault");
+  }
+  state.importingSources.add(sourceId);
+
+  try {
+    return await transactionAsync(db, async () => {
+      const issues: ImportIssue[] = [];
+      const startedAt = new Date().toISOString();
+      const documents: ImportedDocument[] = [];
+      let imported = 0;
+      let updated = 0;
+      let unchanged = 0;
+
+      // Incompleteness is visible to reads on this connection. Other database
+      // connections continue seeing the last committed snapshot until COMMIT.
+      db.prepare(`
+        INSERT INTO sources(
+          id, kind, root_uri, collection, display_name, created_at, last_scanned_at
+        ) VALUES (?, 'folder', ?, ?, ?, ?, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+          display_name = excluded.display_name,
+          last_scanned_at = NULL
+      `).run(sourceId, rootUri, collection, sourceName, startedAt);
+
+      const candidates = await discoverFiles(root, maxFiles, issues);
+      const seenRelativePaths = new Set<string>();
+      for (const candidate of candidates) {
+        if (seenRelativePaths.has(candidate.relativePath)) {
+          issues.push({
+            code: "read-error",
+            path: candidate.relativePath,
+            message: "Another file has the same normalized relative path",
+          });
+          continue;
+        }
+        seenRelativePaths.add(candidate.relativePath);
+        const file = await prepareFile(root, candidate, maxFileBytes, issues);
+        if (!file) continue;
+
+        const importedDocument = importPreparedFile(
+          db,
+          sourceId,
+          file,
+          chunkSize,
+          startedAt,
+        );
+        documents.push(importedDocument);
+        if (importedDocument.status === "created") imported += 1;
+        else if (importedDocument.status === "updated") updated += 1;
+        else unchanged += 1;
+      }
+
+      db.prepare("UPDATE sources SET last_scanned_at = ? WHERE id = ?")
+        .run(new Date().toISOString(), sourceId);
+
+      return {
+        sourceId,
+        rootUri,
+        collection,
+        scanned: candidates.length,
+        imported,
+        updated,
+        unchanged,
+        skipped: issues.length,
+        documents,
+        issues,
+      };
+    });
+  } finally {
+    state.importingSources.delete(sourceId);
+  }
+}
+
+export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchResult[] {
+  const db = databaseFor(vault);
+  if (!input || typeof input.query !== "string") {
+    throw new TypeError("query must be a string");
+  }
+  const query = input.query.trim();
+  if (query.length === 0 || query.length > 2_000) {
+    throw new RangeError("query must contain between 1 and 2,000 characters");
+  }
+  const limit = boundedInteger(
+    input.limit ?? DEFAULT_SEARCH_LIMIT,
+    "limit",
+    1,
+    MAX_SEARCH_LIMIT,
+  );
+  const conditions = [
+    "chunks_fts MATCH ?",
+    "d.current_revision_id = c.revision_id",
+    "s.last_scanned_at IS NOT NULL",
+  ];
+  const parameters: SQLInputValue[] = [literalFtsQuery(query)];
+
+  if (input.collection !== undefined) {
+    conditions.push("s.collection = ?");
+    parameters.push(boundedText(input.collection, "collection", 128));
+  }
+  addDateFilter(conditions, parameters, "d.created_at", ">=", input.createdFrom, "createdFrom");
+  addDateFilter(conditions, parameters, "d.created_at", "<=", input.createdTo, "createdTo");
+  addDateFilter(conditions, parameters, "d.modified_at", ">=", input.modifiedFrom, "modifiedFrom");
+  addDateFilter(conditions, parameters, "d.modified_at", "<=", input.modifiedTo, "modifiedTo");
+  parameters.push(limit);
+
+  let rows: SearchRow[];
+  try {
+    rows = db.prepare(`
+      SELECT
+        d.id AS document_id,
+        c.id AS chunk_id,
+        d.title,
+        snippet(chunks_fts, 5, '', '', ' … ', 24) AS snippet,
+        d.source_uri,
+        d.created_at,
+        d.modified_at,
+        bm25(chunks_fts, 0.0, 0.0, 0.0, 0.3, 0.1, 1.0) AS score
+      FROM chunks_fts
+      JOIN chunks c ON c.id = chunks_fts.chunk_id
+      JOIN documents d ON d.id = c.document_id
+      JOIN sources s ON s.id = d.source_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY score, d.modified_at DESC, c.chunk_index
+      LIMIT ?
+    `).all(...parameters) as unknown as SearchRow[];
+  } catch (error) {
+    if (isFtsSyntaxError(error)) rows = [];
+    else throw error;
+  }
+
+  const createdAt = new Date().toISOString();
+  transaction(db, () => {
+    const insertEvent = db.prepare(`
+      INSERT INTO retrieval_events(
+        event_type, query_hash, document_id, chunk_id, result_count, created_at
+      ) VALUES ('search', ?, ?, ?, ?, ?)
+    `);
+    const queryHash = deterministicId("retrieval-query", query);
+    if (rows.length === 0) {
+      insertEvent.run(queryHash, null, null, 0, createdAt);
+    } else {
+      for (const row of rows) {
+        insertEvent.run(queryHash, row.document_id, row.chunk_id, rows.length, createdAt);
+      }
+    }
+  });
+
+  return rows.map((row) => ({
+    documentId: row.document_id,
+    chunkId: row.chunk_id,
+    title: row.title,
+    snippet: row.snippet,
+    sourceUri: row.source_uri,
+    createdAt: row.created_at,
+    modifiedAt: row.modified_at,
+    score: row.score,
+  }));
+}
+
+export function fetchDocument(
+  vault: Vault,
+  input: FetchDocumentInput,
+): VaultFetchResult | null {
+  const db = databaseFor(vault);
+  if (!input || typeof input.documentId !== "string") {
+    throw new TypeError("documentId is required");
+  }
+  assertHashId(input.documentId, "documentId");
+  if (input.chunkId !== undefined) assertHashId(input.chunkId, "chunkId");
+  const before = boundedInteger(input.before ?? DEFAULT_NEIGHBORS, "before", 0, MAX_NEIGHBORS);
+  const after = boundedInteger(input.after ?? DEFAULT_NEIGHBORS, "after", 0, MAX_NEIGHBORS);
+  const maxChars = boundedInteger(
+    input.maxChars ?? DEFAULT_FETCH_CHARS,
+    "maxChars",
+    1,
+    MAX_FETCH_CHARS,
+  );
+
+  const allRows = db.prepare(`
+    SELECT
+      d.id AS document_id,
+      c.id AS chunk_id,
+      c.chunk_index,
+      c.heading_path,
+      c.content,
+      d.title,
+      d.source_uri,
+      d.created_at,
+      d.modified_at
+    FROM documents d
+    JOIN chunks c ON c.revision_id = d.current_revision_id
+    JOIN sources s ON s.id = d.source_id
+    WHERE d.id = ? AND s.last_scanned_at IS NOT NULL
+    ORDER BY c.chunk_index
+  `).all(input.documentId) as unknown as FetchRow[];
+  if (allRows.length === 0) return null;
+
+  const anchorPosition = input.chunkId === undefined
+    ? 0
+    : allRows.findIndex((row) => row.chunk_id === input.chunkId);
+  if (anchorPosition < 0) return null;
+
+  const selected = allRows.slice(
+    Math.max(0, anchorPosition - before),
+    Math.min(allRows.length, anchorPosition + after + 1),
+  );
+  const bounded = boundFetchedChunks(selected, anchorPosition, allRows, maxChars);
+  const anchor = allRows[anchorPosition];
+  const first = allRows[0];
+  if (!anchor || !first) return null;
+  const content = bounded.map((chunk) => chunk.content).join("\n\n");
+  const result: VaultFetchResult = {
+    documentId: first.document_id,
+    chunkId: anchor.chunk_id,
+    title: first.title,
+    snippet: content,
+    sourceUri: first.source_uri,
+    createdAt: first.created_at,
+    modifiedAt: first.modified_at,
+    content,
+    chunks: bounded,
+  };
+
+  db.prepare(`
+    INSERT INTO retrieval_events(
+      event_type, query_hash, document_id, chunk_id, result_count, created_at
+    ) VALUES ('fetch', NULL, ?, ?, 1, ?)
+  `).run(result.documentId, result.chunkId, new Date().toISOString());
+  return result;
+}
+
+export function purgeDocument(vault: Vault, documentId: string): boolean {
+  const db = databaseFor(vault);
+  assertHashId(documentId, "documentId");
+  let deleted = false;
+  transaction(db, () => {
+    const result = db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
+    deleted = Number(result.changes) > 0;
+  });
+  return deleted;
+}
+
+function stateFor(vault: Vault): VaultState {
+  const state = states.get(vault);
+  if (!state) throw new TypeError("vault was not created by openVault");
+  if (state.closed) throw new Error("vault is closed");
+  return state;
+}
+
+function databaseFor(vault: Vault): DatabaseSync {
+  return stateFor(vault).db;
+}
+
+function importPreparedFile(
+  db: DatabaseSync,
+  sourceId: string,
+  file: PreparedFile,
+  chunkSize: number,
+  importedAt: string,
+): ImportedDocument {
+  const documentId = deterministicId("document", sourceId, file.relativePath);
+  const existing = db.prepare(`
+    SELECT
+      d.id,
+      d.current_revision_id,
+      r.content_hash,
+      r.ordinal
+    FROM documents d
+    LEFT JOIN revisions r ON r.id = d.current_revision_id
+    WHERE d.id = ?
+  `).get(documentId) as unknown as DocumentRow | undefined;
+
+  if (existing && existing.content_hash === file.contentHash) {
+    if (!existing.current_revision_id) {
+      throw new Error(`Document ${documentId} has no current revision`);
+    }
+    db.prepare(`
+      UPDATE documents SET
+        source_uri = ?, title = ?, created_at = ?, modified_at = ?
+      WHERE id = ?
+    `).run(file.sourceUri, file.title, file.createdAt, file.modifiedAt, documentId);
+    return {
+      documentId,
+      revisionId: existing.current_revision_id,
+      sourceUri: file.sourceUri,
+      relativePath: file.relativePath,
+      status: "unchanged",
+    };
+  }
+
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO documents(
+        id, source_id, relative_path, source_uri, title,
+        created_at, modified_at, current_revision_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+    `).run(
+      documentId,
+      sourceId,
+      file.relativePath,
+      file.sourceUri,
+      file.title,
+      file.createdAt,
+      file.modifiedAt,
+    );
+  } else {
+    db.prepare(`
+      UPDATE documents SET
+        source_uri = ?, title = ?, created_at = ?, modified_at = ?
+      WHERE id = ?
+    `).run(file.sourceUri, file.title, file.createdAt, file.modifiedAt, documentId);
+  }
+
+  const ordinal = (existing?.ordinal ?? 0) + 1;
+  const revisionId = deterministicId(
+    "revision",
+    documentId,
+    String(ordinal),
+    file.contentHash,
+  );
+  db.prepare(`
+    INSERT INTO revisions(
+      id, document_id, ordinal, content_hash, content, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(revisionId, documentId, ordinal, file.contentHash, file.content, importedAt);
+
+  const chunks = chunkDocument(revisionId, file.content, chunkSize);
+  const insertChunk = db.prepare(`
+    INSERT INTO chunks(
+      id, revision_id, document_id, chunk_index, heading_path,
+      start_offset, end_offset, content, title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const chunk of chunks) {
+    insertChunk.run(
+      chunk.id,
+      revisionId,
+      documentId,
+      chunk.index,
+      JSON.stringify(chunk.headingPath),
+      chunk.startOffset,
+      chunk.endOffset,
+      chunk.content,
+      file.title,
+    );
+  }
+  db.prepare("UPDATE documents SET current_revision_id = ? WHERE id = ?")
+    .run(revisionId, documentId);
+
+  return {
+    documentId,
+    revisionId,
+    sourceUri: file.sourceUri,
+    relativePath: file.relativePath,
+    status: existing ? "updated" : "created",
+  };
+}
+
+async function safeRoot(directoryPath: string): Promise<string> {
+  if (typeof directoryPath !== "string" || directoryPath.trim().length === 0) {
+    throw new TypeError("directoryPath must be a non-empty path");
+  }
+  const requested = resolve(directoryPath);
+  const linkInfo = await lstat(requested);
+  if (linkInfo.isSymbolicLink()) {
+    throw new Error("The import root must not be a symbolic link");
+  }
+  if (!linkInfo.isDirectory()) {
+    throw new Error("The import root must be a directory");
+  }
+  return realpath(requested);
+}
+
+async function discoverFiles(
+  root: string,
+  maxFiles: number,
+  issues: ImportIssue[],
+): Promise<CandidateFile[]> {
+  const directories = [root];
+  const files: CandidateFile[] = [];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    if (!directory) continue;
+    const entries = [];
+    const handle = await opendir(directory);
+    for await (const entry of handle) entries.push(entry);
+    entries.sort((left, right) => compareNames(left.name, right.name));
+
+    for (const entry of entries) {
+      const absolutePath = resolve(directory, entry.name);
+      const displayPath = normalizeRelative(root, absolutePath);
+      let info;
+      try {
+        info = await lstat(absolutePath);
+      } catch (error) {
+        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
+        continue;
+      }
+      if (info.isSymbolicLink()) {
+        issues.push({
+          code: "symlink",
+          path: displayPath,
+          message: "Symbolic links and junctions are not followed",
+        });
+        continue;
+      }
+
+      let actualPath: string;
+      try {
+        actualPath = await realpath(absolutePath);
+      } catch (error) {
+        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
+        continue;
+      }
+      if (!isWithin(root, actualPath)) {
+        issues.push({
+          code: "outside-root",
+          path: displayPath,
+          message: "Resolved path is outside the selected import root",
+        });
+        continue;
+      }
+
+      if (info.isDirectory()) {
+        directories.push(actualPath);
+        continue;
+      }
+      if (!info.isFile() || !isSupportedTextFile(entry.name)) continue;
+      if (files.length >= maxFiles) {
+        throw new RangeError(`Import exceeds the maxFiles limit of ${maxFiles}`);
+      }
+      files.push({
+        absolutePath: actualPath,
+        relativePath: normalizeRelative(root, actualPath),
+      });
+    }
+  }
+  files.sort((left, right) => compareNames(left.relativePath, right.relativePath));
+  return files;
+}
+
+async function prepareFile(
+  root: string,
+  candidate: CandidateFile,
+  maxFileBytes: number,
+  issues: ImportIssue[],
+): Promise<PreparedFile | null> {
+  let fileHandle;
+  try {
+    const noFollow = "O_NOFOLLOW" in constants
+      ? (constants as typeof constants & { O_NOFOLLOW: number }).O_NOFOLLOW
+      : 0;
+    fileHandle = await open(candidate.absolutePath, constants.O_RDONLY | noFollow);
+    const info = await fileHandle.stat();
+    if (!info.isFile()) {
+      issues.push({
+        code: "read-error",
+        path: candidate.relativePath,
+        message: "Path is no longer a regular file",
+      });
+      return null;
+    }
+    if (info.size > maxFileBytes) {
+      issues.push({
+        code: "too-large",
+        path: candidate.relativePath,
+        message: `File is ${info.size} bytes; limit is ${maxFileBytes}`,
+      });
+      return null;
+    }
+    if (!isWithin(root, await realpath(candidate.absolutePath))) {
+      issues.push({
+        code: "outside-root",
+        path: candidate.relativePath,
+        message: "File moved outside the import root while it was being read",
+      });
+      return null;
+    }
+    const buffer = await fileHandle.readFile();
+    if (buffer.byteLength > maxFileBytes) {
+      issues.push({
+        code: "too-large",
+        path: candidate.relativePath,
+        message: `File grew to ${buffer.byteLength} bytes while being read; limit is ${maxFileBytes}`,
+      });
+      return null;
+    }
+    let decoded: string;
+    try {
+      decoded = UTF8_DECODER.decode(buffer);
+    } catch {
+      issues.push({
+        code: "invalid-utf8",
+        path: candidate.relativePath,
+        message: "Only valid UTF-8 .md and .txt files are supported",
+      });
+      return null;
+    }
+    const content = normalizeText(decoded);
+    const fallbackTitle = basename(candidate.relativePath, extname(candidate.relativePath));
+    const birth = info.birthtimeMs > 0 ? info.birthtime : info.ctime;
+    return {
+      ...candidate,
+      content,
+      contentHash: contentHash(content),
+      createdAt: validIso(birth),
+      modifiedAt: validIso(info.mtime),
+      sourceUri: pathToFileURL(candidate.absolutePath).href,
+      title: titleFromText(content, fallbackTitle),
+    };
+  } catch (error) {
+    issues.push({
+      code: "read-error",
+      path: candidate.relativePath,
+      message: errorMessage(error),
+    });
+    return null;
+  } finally {
+    await fileHandle?.close();
+  }
+}
+
+function normalizeRelative(root: string, child: string): string {
+  return relative(root, child).split(sep).join("/").normalize("NFC");
+}
+
+function isWithin(root: string, candidate: string): boolean {
+  const difference = relative(root, candidate);
+  return difference === "" || (
+    difference !== ".." &&
+    !difference.startsWith(`..${sep}`) &&
+    !isAbsolute(difference)
+  );
+}
+
+function directoryUri(root: string): string {
+  return pathToFileURL(root.endsWith(sep) ? root : `${root}${sep}`).href;
+}
+
+function isSupportedTextFile(name: string): boolean {
+  const extension = extname(name).toLocaleLowerCase("en-US");
+  return extension === ".md" || extension === ".txt";
+}
+
+function compareNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function transaction<T>(db: DatabaseSync, operation: () => T): T {
+  const name = `owncontext_savepoint_${nextSavepointId++}`;
+  db.exec(`SAVEPOINT ${name}`);
+  try {
+    const result = operation();
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    db.exec(`ROLLBACK TO SAVEPOINT ${name}`);
+    db.exec(`RELEASE SAVEPOINT ${name}`);
+    throw error;
+  }
+}
+
+let nextSavepointId = 1;
+
+async function transactionAsync<T>(
+  db: DatabaseSync,
+  operation: () => Promise<T>,
+): Promise<T> {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = await operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function literalFtsQuery(query: string): string {
+  return query
+    .split(/\s+/u)
+    .filter(Boolean)
+    .map((term) => `"${term.replaceAll('"', '""')}"`)
+    .join(" AND ");
+}
+
+function addDateFilter(
+  conditions: string[],
+  parameters: SQLInputValue[],
+  column: string,
+  operator: ">=" | "<=",
+  value: string | undefined,
+  name: string,
+): void {
+  if (value === undefined) return;
+  conditions.push(`${column} ${operator} ?`);
+  parameters.push(parseDate(value, name));
+}
+
+function parseDate(value: string, name: string): string {
+  if (typeof value !== "string") throw new TypeError(`${name} must be a date string`);
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new RangeError(`${name} must be a valid date`);
+  return date.toISOString();
+}
+
+function boundedText(value: string, name: string, maximum: number): string {
+  if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
+  const normalized = value.trim().normalize("NFC");
+  if (normalized.length === 0 || normalized.length > maximum) {
+    throw new RangeError(`${name} must contain between 1 and ${maximum} characters`);
+  }
+  return normalized;
+}
+
+function boundedInteger(value: number, name: string, minimum: number, maximum: number): number {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+function validIso(value: Date): string {
+  return Number.isFinite(value.getTime()) ? value.toISOString() : new Date(0).toISOString();
+}
+
+function boundFetchedChunks(
+  selectedRows: FetchRow[],
+  anchorPosition: number,
+  allRows: FetchRow[],
+  maxChars: number,
+): FetchedChunk[] {
+  const anchorIndex = allRows[anchorPosition]?.chunk_index ?? 0;
+  let rows = [...selectedRows];
+  const payloadLength = () => rows.reduce((total, row) => total + row.content.length, 0)
+    + Math.max(0, rows.length - 1) * 2;
+
+  while (rows.length > 1 && payloadLength() > maxChars) {
+    const firstDistance = Math.abs((rows[0]?.chunk_index ?? anchorIndex) - anchorIndex);
+    const lastDistance = Math.abs((rows.at(-1)?.chunk_index ?? anchorIndex) - anchorIndex);
+    if (lastDistance >= firstDistance) rows.pop();
+    else rows.shift();
+  }
+
+  let remaining = maxChars;
+  return rows.map((row, index) => {
+    if (index > 0) remaining = Math.max(0, remaining - 2);
+    const content = row.content.slice(0, remaining);
+    remaining = Math.max(0, remaining - content.length);
+    return {
+      chunkId: row.chunk_id,
+      index: row.chunk_index,
+      headingPath: parseHeadingPath(row.heading_path),
+      content,
+    };
+  });
+}
+
+function parseHeadingPath(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((part) => typeof part === "string")
+      ? parsed
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function isFtsSyntaxError(error: unknown): boolean {
+  return error instanceof Error && /fts5|syntax error/iu.test(error.message);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

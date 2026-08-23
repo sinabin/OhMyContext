@@ -29,7 +29,7 @@ Acceptance:
 
 ## Milestone 1 — Local vault vertical slice
 
-Status: planned
+Status: completed
 
 Deliverables:
 
