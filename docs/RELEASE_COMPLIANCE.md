@@ -196,12 +196,18 @@ inspection hash must equal the maker-provenance hash, followed by another Setup
 hash, so a transient replacement cannot lend a different binary's signature to
 the recorded candidate.
 
-`.github/workflows/alpha-ci.yml` runs the locked install, full project check,
-Windows make, and a separate release-bundle verification with repository
-`contents: read` permission only. All referenced actions are pinned to full
-commit SHAs. The workflow contains no release mutation or signing permission;
-it retains the unsigned bundle for three days only when the repository is
-private. This is CI evidence, not a GitHub Release workflow.
+`.github/workflows/alpha-ci.yml` runs the locked dependency install, full
+project check, Windows make, and a separate release-bundle verification with
+repository `contents: read` permission only. It then permits actual Squirrel
+Setup installation, installed GUI/MCP fixture checks, managed-config cleanup,
+and uninstall only when both GitHub's runner context and runtime environment
+identify a GitHub-hosted `windows-latest` machine. Static mutant tests cover
+that guard and its exact ARP, shortcut, config-preservation, and temporary
+profile assertions. The lifecycle has not yet completed its first hosted run,
+so the code is not installation evidence by itself. All referenced actions are
+pinned to full commit SHAs. The workflow contains no release mutation or signing
+permission; it retains the unsigned bundle for three days only when the
+repository is private. This is CI evidence, not a GitHub Release workflow.
 
 The `.nupkg` checks currently consume central-directory semantics through .NET
 and `yauzl`. They do not yet prove that every raw local header matches its
@@ -276,7 +282,9 @@ This foundation does not yet prove:
   currently passes `npm audit --omit=dev`, while the full audit still fails in
   Electron Forge's archive/extraction dependency tree and has no verified
   semver-compatible stable upgrade;
-- that an installer is signed, reproducible, encrypted at rest, or safe; or
+- that an installer is signed, reproducible, encrypted at rest, or safe;
+- that the GitHub-hosted lifecycle harness has passed its first real Setup and
+  uninstall run, a no-Node clean consumer machine, or an actual shortcut click; or
 - that a future installer format can be inspected without extraction.
 
 Release automation must archive the verified unpacked payload, installer,

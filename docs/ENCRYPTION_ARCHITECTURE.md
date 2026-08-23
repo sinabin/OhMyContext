@@ -1,6 +1,6 @@
 # Windows-first vault encryption architecture
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 Status: **Foundation prototype verified; vault encryption not implemented**
 
@@ -96,6 +96,14 @@ vault:
   snapshot. A provider that merely calls itself `encrypted-candidate` is not
   release evidence; the future provider must still pass the cipher-status and
   at-rest matrix in this document.
+- `openEncryptedVaultCandidate` is a separate, key-required path. It accepts
+  only a genuine 32-byte `Buffer`, captures provider/session operations once to
+  prevent getter substitution, calls keyed open before schema work, requires an
+  exact positive cipher/integrity attestation, and supports only
+  `open-existing` or `create-exclusive`. A keyless caller is rejected, every
+  post-open failure closes the candidate session, errors are content-free, and
+  there is no plaintext fallback. These tests verify the adapter contract; no
+  shipped provider yet demonstrates page encryption or key-before-page access.
 - The plaintext provider inspects the 100-byte database header and, only when
   both header mode bytes declare WAL, checksum-valid WAL frames through
   read-only file descriptors before it opens SQLite. It caps WAL inspection at
@@ -237,9 +245,11 @@ separate reviewed design and must not reuse or expose the local DEK.
 
 ## Encrypted database-provider contract
 
-The core must stop constructing `DatabaseSync` directly. It will depend on a
-narrow vault-storage interface implemented inside the broker's process. The
-selected native provider must demonstrate all of the following before adoption:
+The core vault now depends on a narrow storage interface; direct `DatabaseSync`
+construction is confined to the explicit plaintext development provider. The
+keyed candidate entry point enforces call ordering and positive attestation at
+the adapter boundary. The selected native provider must still demonstrate all
+of the following before adoption:
 
 - Windows x64 support for the pinned Electron ABI and a reproducible source-build
   fallback; native binaries are unpacked from ASAR and included in SBOM,
@@ -472,8 +482,9 @@ captured from a packaged Windows x64 release candidate, not only unit tests.
 
 1. Introduce storage and key-provider interfaces with the existing plaintext
    backend retained only for tests/developer fixtures and visibly labeled.
-   **Prototype verified.** The packaged synthetic safeStorage envelope is also
-   verified, but it is not connected to the vault.
+   **Prototype verified.** The fail-closed keyed candidate contract and packaged
+   synthetic safeStorage envelope are also verified, but neither supplies a
+   real encrypted database provider or connects OS key unwrapping to the vault.
 2. Run the Windows encrypted-provider and named-pipe spikes; record exact version,
    build, license, performance, and adversarial evidence.
 3. Implement the broker/bridge split and make direct MCP database opening an

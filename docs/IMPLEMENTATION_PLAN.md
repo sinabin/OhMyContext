@@ -1,6 +1,6 @@
 # Implementation plan
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 ## Objective
 
@@ -83,10 +83,15 @@ requests, with explicit local-only deletion. The packaged GUI smoke now follows
 the built-in sample through search, the read-only AI Connections preview, and
 the desktop access-history entry, and
 a read-only Windows alpha workflow verifies a source-bound draft release bundle
-without creating a public release. A clean-machine Setup install/uninstall
-exercise, actual packaged client-connection mutation, non-developer usability
-evidence, a signed public candidate, and a verified update channel remain
-outstanding.
+without creating a public release. A source-bound packaged-client smoke uses
+temporary profiles to verify Codex's exact managed-config parse and Claude
+Code's exact `owncontext` connected status, temporary vault creation, and zero
+search/fetch activity. A GitHub-hosted-only lifecycle step for actual Setup,
+installed GUI/MCP fixtures, managed-config cleanup, and uninstall is implemented
+and statically verified, but its first hosted execution remains pending. A clean
+consumer machine without the CI Node toolchain, authenticated live-client tool
+use, non-developer usability evidence, a signed public candidate, and a verified
+update channel remain outstanding.
 
 Deliverables:
 
@@ -115,6 +120,16 @@ Deliverables:
   Excess legacy rows are securely pruned in restart-safe 1,000-row transactions
   with bounded WAL checkpoints before v3 copying; a pinned reader pauses safely
   and the next launch resumes after other clients close.
+- A Windows x64 packaged-client compatibility smoke that uses only temporary
+  Codex/Claude profiles, rejects standalone client executables outside the
+  expected npm package layouts, verifies exact managed launch data and Claude's
+  selected-server health block, and confirms no search/fetch audit rows were
+  created by configuration inspection. This is not authenticated provider or
+  model-response evidence.
+- A GitHub-hosted `windows-latest` lifecycle harness that is source-bound to the
+  draft bundle and is designed to install, exercise, and uninstall the actual
+  Squirrel package. Static and adversarial tests pass; actual hosted execution
+  is still required before the lifecycle claim advances.
 - Privacy copy that distinguishes offline mode from cloud-AI excerpt transfer.
 - Two-step source removal with stale-confirmation protection and a persistent,
   content-free logical deletion receipt.
@@ -175,6 +190,10 @@ Deliverables:
   lockfile, packaged synthetic Windows key-envelope evidence, and Authenticode
   status; it remains explicitly non-public. The core storage interface and a
   packaged async Electron `safeStorage` round trip are prototype-verified. A
+  separate keyed encrypted-candidate open contract now requires a real 32-byte
+  `Buffer`, keyed open before schema work, positive exact cipher/integrity
+  attestation, exclusive-create or existing-open mode, failure cleanup, and no
+  plaintext retry. No native encrypted provider implements that contract yet. A
   bounded read-only header/WAL parser requires matching WAL mode, preserves a
   stopped future-schema main/WAL fixture exactly, and the key smoke rejects byte
   and UTF-16 plaintext no-op wrappers. The real DB/FTS/WAL/backups are still

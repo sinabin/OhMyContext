@@ -68,7 +68,12 @@ private.
 The core now requires every caller to select a storage provider explicitly. The
 only shipped provider is visibly identified as `node-sqlite-development` with a
 `plaintext-development` security profile; there is no implicit plaintext
-fallback. Its bounded, read-only compatibility parser checks the database
+fallback. A separate encrypted-candidate entry point now requires an exact
+32-byte `Buffer`, passes it only to a keyed provider open, requires positive
+cipher and integrity attestation before schema access, closes on every
+post-open failure, and never retries through the plaintext provider. This is a
+fail-closed provider contract, not an encrypted implementation. The plaintext
+provider's bounded, read-only compatibility parser checks the database
 header and, only when both header mode bytes declare WAL, valid WAL frames
 without opening SQLite. A stable zero-byte WAL created by a live reader is
 treated as having no frames. A mismatched WAL sidecar or rollback journal fails
@@ -102,10 +107,15 @@ or grant expiry. The desktop now shows a bounded, content-free local access
 history attributed to desktop, a Codex/Claude Code launch declaration, or an
 honest legacy label;
 it never displays queries, bodies, titles, document/chunk IDs, or paths in that
-history. Client
-kind is fixed by the managed launch rather than tool input, but it is not
-cryptographic proof of provider receipt or retention. Packaged external-client
-and adversarial validation remain public-release gates. Retrieval returns no
+history. Client kind is fixed by the managed launch rather than tool input, but
+it is not cryptographic proof of provider receipt or retention. Packaged external-client
+compatibility is now checked with isolated temporary profiles: Codex must parse
+the exact managed stdio record, and Claude Code must report the `owncontext`
+block as connected while opening the packaged MCP against a temporary vault
+that records zero search/fetch activity. The harness invokes only local
+configuration-inspection subcommands and removes inherited credentials. It is
+not a model-response, authenticated-client, or executable-publisher proof;
+those adversarial validations remain public-release gates. Retrieval returns no
 context if an import or another writer prevents its audit entry, and MCP returns
 a content-free retry instruction. The current vault still uses one global FTS
 index, so candidate work, cache effects, and response timing are not yet proven
@@ -138,6 +148,13 @@ The alpha also does not yet prove Windows DACL preservation or OS-level
 compare-and-swap safety for Claude configuration replacement, and it does not
 persist shell-local `CLAUDE_CONFIG_DIR` targets across updater environments. Use
 only non-sensitive fixtures until those release gates are closed.
+
+The GitHub-hosted Windows workflow now contains a fail-closed lifecycle step
+for silent Setup installation, installed GUI/MCP fixture smoke, managed client
+configuration cleanup, and Squirrel uninstall. Its safety boundary is
+statically tested and it cannot run on a self-hosted runner. The actual hosted
+install/uninstall result remains unverified until that workflow runs; the
+installer is intentionally not executed on the local development machine.
 
 ## Platform and hardware status
 
