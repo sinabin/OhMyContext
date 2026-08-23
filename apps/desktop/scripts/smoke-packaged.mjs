@@ -33,6 +33,12 @@ import {
   FORGE_BUILD_ID_ENV,
   validateForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
+import {
+  ENCRYPTED_SQLITE_NATIVE_SHA256,
+  ENCRYPTED_SQLITE_PACKAGE_VERSION,
+  ENCRYPTED_SQLITE_RUNTIME_MANIFEST,
+  verifyEncryptedSqliteRuntime,
+} from "./encrypted-sqlite-runtime.mjs";
 import { assertOfflineNuspecMetadata } from "./nuspec-offline-policy.mjs";
 import { verifySquirrelMakerProvenance } from "./squirrel-maker-provenance.mjs";
 import { verifySquirrelPackageInventory } from "./squirrel-package-inventory.mjs";
@@ -395,6 +401,11 @@ const resources = resolve(packagedDirectory, "resources");
 const asarPath = resolve(resources, "app.asar");
 const mcpEntry = resolve(resources, "mcp-server", "cli.mjs");
 const manifestPath = resolve(resources, "mcp-server", "runtime-manifest.json");
+const encryptedSqliteRuntime = resolve(resources, "encrypted-sqlite-runtime");
+const encryptedSqliteManifestPath = resolve(
+  encryptedSqliteRuntime,
+  ENCRYPTED_SQLITE_RUNTIME_MANIFEST,
+);
 const noticePath = resolve(resources, "UNSIGNED-DEVELOPER-PREVIEW.txt");
 const complianceDirectory = resolve(resources, "compliance");
 const compliancePaths = complianceNames.map((name) =>
@@ -406,6 +417,7 @@ for (const requiredPath of [
   asarPath,
   mcpEntry,
   manifestPath,
+  encryptedSqliteManifestPath,
   noticePath,
   ...compliancePaths,
 ]) {
@@ -462,6 +474,17 @@ if (requireMaker) {
       "SQUIRREL-MAKER-PROVENANCE.json",
     ),
   });
+}
+
+const encryptedSqliteEvidence = await verifyEncryptedSqliteRuntime({
+  targetDirectory: encryptedSqliteRuntime,
+});
+if (
+  encryptedSqliteEvidence.packageVersion !== ENCRYPTED_SQLITE_PACKAGE_VERSION ||
+  encryptedSqliteEvidence.nativeSha256 !== ENCRYPTED_SQLITE_NATIVE_SHA256 ||
+  encryptedSqliteEvidence.manifest.boundary.publicDistributionApproved !== false
+) {
+  throw new Error("Packaged encrypted SQLite developer candidate is invalid.");
 }
 
 await verifyCompliance({

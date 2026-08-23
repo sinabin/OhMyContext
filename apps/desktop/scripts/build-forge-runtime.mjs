@@ -3,12 +3,17 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { stageEncryptedSqliteRuntime } from "./encrypted-sqlite-runtime.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(scriptsDirectory, "..");
 const repositoryDirectory = resolve(desktopDirectory, "..", "..");
 const generatedDirectory = resolve(desktopDirectory, ".forge-runtime");
 const mcpDirectory = resolve(generatedDirectory, "mcp-server");
+const encryptedSqliteDirectory = resolve(
+  generatedDirectory,
+  "encrypted-sqlite-runtime",
+);
 
 function assertGeneratedDirectory(candidate) {
   const normalized = relative(desktopDirectory, candidate).split(sep).join("/");
@@ -79,3 +84,13 @@ await writeFile(
   `${JSON.stringify(manifest, null, 2)}\n`,
   { encoding: "utf8", mode: 0o600 },
 );
+
+await stageEncryptedSqliteRuntime({
+  sourceRoot: resolve(
+    repositoryDirectory,
+    "node_modules",
+    "better-sqlite3-multiple-ciphers",
+  ),
+  lockfilePath: resolve(repositoryDirectory, "package-lock.json"),
+  targetDirectory: encryptedSqliteDirectory,
+});

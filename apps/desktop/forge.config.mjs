@@ -54,6 +54,7 @@ const config = {
     executableName: "OwnContextDeveloperPreview",
     extraResource: [
       resolve(generatedRuntime, "mcp-server"),
+      resolve(generatedRuntime, "encrypted-sqlite-runtime"),
       previewNotice,
     ],
     ignore: ignoreNonRuntimeFile,
