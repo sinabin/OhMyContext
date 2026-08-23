@@ -25,6 +25,7 @@ import {
   FORGE_BUILD_ID_ENV,
   validateForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
+import { verifySquirrelMakerProvenance } from "./squirrel-maker-provenance.mjs";
 import { verifySquirrelPackageInventory } from "./squirrel-package-inventory.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,8 @@ const outDirectory = resolve(desktopDirectory, "out");
 const requireMaker = process.argv.includes("--require-maker");
 const squirrelPackageName = "OwnContextDeveloperPreview";
 const applicationExecutableName = "OwnContextDeveloperPreview.exe";
+const setupFileName = "OwnContext-Developer-Preview-Unsigned-Setup.exe";
+const fullPackageFileName = `${squirrelPackageName}-0.0.0-full.nupkg`;
 const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgUncompressedBytes = 8 * 1024 * 1024 * 1024;
@@ -298,25 +301,7 @@ for (const requiredPath of [
 
 if (requireMaker) {
   const makerDirectory = resolve(buildDirectory, "make", "squirrel.windows", "x64");
-  const makerFiles = await readdir(makerDirectory);
-  const requiredMakerFiles = [
-    "OwnContext-Developer-Preview-Unsigned-Setup.exe",
-    "OwnContextDeveloperPreview-0.0.0-full.nupkg",
-    "RELEASES",
-  ];
-  for (const requiredFile of requiredMakerFiles) {
-    if (!makerFiles.includes(requiredFile)) {
-      throw new Error(`Squirrel output is missing ${requiredFile}.`);
-    }
-  }
-  const releases = await readFile(resolve(makerDirectory, "RELEASES"), "utf8");
-  if (!releases.includes("OwnContextDeveloperPreview-0.0.0-full.nupkg")) {
-    throw new Error("Squirrel RELEASES metadata does not reference the full package.");
-  }
-  const nupkgPath = resolve(
-    makerDirectory,
-    `${squirrelPackageName}-0.0.0-full.nupkg`,
-  );
+  const nupkgPath = resolve(makerDirectory, fullPackageFileName);
   const nupkgEntries = inspectNupkgEntries(nupkgPath);
   const payloadFiles = await inventoryPackagedFiles(packagedDirectory);
   verifySquirrelPackageInventory({
@@ -341,6 +326,20 @@ if (requireMaker) {
       );
     }
   }
+  await verifySquirrelMakerProvenance({
+    makerDirectory,
+    electronWinstallerDirectory: resolve(projectRoot, "node_modules", "electron-winstaller"),
+    manifestPath: resolve(desktopDirectory, "packaging", "squirrel-maker-inputs.json"),
+    setupFileName,
+    fullPackageFileName,
+    applicationExecutableName,
+    evidenceRoot: buildDirectory,
+    evidencePath: resolve(
+      buildDirectory,
+      "evidence",
+      "SQUIRREL-MAKER-PROVENANCE.json",
+    ),
+  });
 }
 
 await verifyCompliance({

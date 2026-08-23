@@ -55,19 +55,45 @@ the document using the IDs issued by that search, and removes the fixture
 afterward. A separate launch with isolated temporary user data confirms that
 the packaged renderer and preload bridge load in normal GUI mode.
 
-Archive names are checked without slash or case normalization, and inspection
+Central-directory archive names are checked without slash or case normalization, and inspection
 has bounded compressed size, entry count, individual/total uncompressed size,
 output buffering, and execution time. The three compliance files also retain
-explicit named checks. The smoke does not yet independently extract the setup
-executable's embedded PE payload; that outer-container check remains a
-public-release evidence gate.
+explicit named checks. Before Forge can load the maker, and again immediately
+before make, the orchestrator pins every regular file installed under
+`electron-winstaller@5.4.4` except its two declared mutable, non-input Squirrel
+log paths; this includes its NuGet executable, template,
+orchestration code, nested packages, bootstrap binaries, and assets. With maker
+output required, the smoke repeats that check, requires an exact maker-directory
+inventory and one valid `RELEASES` record, parses the setup PE, and
+byte-compares its four embedded ZIP members with the emitted package, metadata,
+approved update executable, and spinner. A raw ZIP walker requires contiguous
+and matching local/central headers, recomputed CRC-32, no extra/comment/gap or
+trailing bytes, and fixed non-path attributes. Fixed PE headers and sections must
+retain their approved bytes, changed layout fields must equal values derived
+from the resource size and alignments, and the resource tree permits only the
+reviewed metadata, payloads, and padding. The setup version resource is pinned;
+the execution stub's resource keys and bytes must come from the verified
+packaged application executable. NuGet product XML is either byte-pinned or
+matched to a canonical form with only bounded random identifiers. A
+deterministic draft record is created
+atomically under the build's `evidence` directory.
 
-This evidence covers the unpacked application payload, not every maker-added
-byte. Squirrel adds `lib/net45/squirrel.exe`,
+This evidence covers the unpacked application payload and a constrained,
+semantic maker transform from pinned inputs, but it is not bit-for-bit
+reproducibility or complete maker-layer legal evidence. Root-hoisted build
+dependencies remain governed by the lockfile rather than the installed-package
+tree record, the excluded logs have no content provenance, and a hostile or
+compromised build host is outside this proof.
+The `.nupkg` payload and metadata are verified through central-directory
+semantics; raw nupkg local-header equivalence and parser-differential safety
+remain a public-release gate even though the enclosing Setup ZIP receives the
+strict raw-structure checks above.
+Squirrel adds
+`lib/net45/squirrel.exe`,
 `lib/net45/OwnContextDeveloperPreview_ExecutionStub.exe`, and package metadata
 to the `.nupkg`, while setup/update bootstrap components live outside the
-verified application payload. Their complete license/provenance inventory and
-checksum coverage remain public-release gates.
+verified application payload. Complete license, SBOM/notices, and release
+checksum coverage for that maker layer remain public-release gates.
 
 Expected maker outputs include:
 

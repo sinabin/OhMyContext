@@ -33,6 +33,8 @@
     "@vitejs/plugin-react": "^6.1.0",
     "electron": "^43.4.1",
     "esbuild": "^0.28.2",
-    "vite": "^8.2.2"
+    "pe-library": "1.0.1",
+    "vite": "^8.2.2",
+    "yauzl": "2.10.0"
   }
 }

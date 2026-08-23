@@ -17,13 +17,13 @@ unchanged. The integrated Squirrel smoke test maps the complete regular-file
 inventory to `lib/net45` by relative path, size, and SHA-256. It fails on a
 missing or changed payload file and on any file outside the explicit
 Squirrel/NuGet allowlist. Archive entry names are compared without path
-normalization, so backslashes, traversal segments, and case changes fail rather
+normalization in the central directory, so backslashes, traversal segments,
+and case changes fail rather
 than being rewritten into an expected path. Inspection also applies bounded
 compressed size, entry count, individual and total uncompressed size, output,
 and execution time. Squirrel also adds its own files, so this application-payload
-result does not describe the complete maker output. Before
-publication, extract the setup artifact and verify both the application payload
-and the separately inventoried maker layer.
+result is paired with a separate maker-provenance gate. That gate does not
+expand the payload SBOM or decide whether redistribution is legally sufficient.
 
 `electron-winstaller`'s default NuSpec template does not include Electron's
 `LICENSES.chromium.html` or extensionless `version` file. The Forge maker
@@ -87,29 +87,71 @@ npm run make --workspace @owncontext/desktop
 The orchestrator validates and pins one `OWNCONTEXT_FORGE_BUILD_ID`, creates the
 unpacked package, generates and verifies draft evidence under
 `resources/compliance`, and only then runs Forge make with `--skip-package`.
+Before Forge can load `electron-winstaller`, and again immediately before make,
+it verifies every installed maker-package regular file except the declared
+mutable, non-input `vendor/Squirrel-Releasify.log` and
+`vendor/Squirrel-Unset.log` paths against a pinned count, total length, and
+aggregate SHA-256. An excluded path may be absent; when present, it must still
+be a regular file, so links and special files fail.
 The final smoke test re-verifies the unpacked payload and byte-compares every
 regular payload file against its Squirrel `.nupkg` entry using relative path,
 size, and SHA-256. The two maker-added executable files and four NuGet metadata
 files are required through a separate, fail-closed allowlist. The three
 compliance files also receive named checks so their evidence boundary stays
-visible. This proves the inspected `.nupkg` contains the complete verified
-application payload unchanged; it does not audit the allowed maker bytes.
+visible.
 
-The current automated smoke does not independently parse the setup executable's
-embedded PE payload. `Setup.exe` is made in the same Forge invocation from the
-verified `.nupkg`, but an extraction-and-byte-comparison test for that outer
-container remains a release-evidence boundary. These outputs remain unsigned,
-draft-only, and prohibited from public release while the license hold applies.
+With `--require-maker`, the smoke also verifies the outer Squirrel layer against
+`apps/desktop/packaging/squirrel-maker-inputs.json`. That manifest pins the
+installed `electron-winstaller@5.4.4` package identity, installed regular-file
+tree with two explicit mutable-log exclusions, and six security-relevant
+files by byte length and SHA-256.
+The verifier requires an exact three-file maker directory, parses `RELEASES` as
+one record and checks its SHA-1 and length, and parses the emitted setup PE. The
+setup must retain the approved x86 GUI entry point, fixed header bytes, and
+byte-identical `.text`, `.rdata`, `.data`, and `.reloc` sections; changed PE
+layout fields must equal values derived from the resource size and file/section
+alignments. No overlay or unexpected section is accepted. A strict resource
+walker rejects nested metadata changes, aliases, overlaps, out-of-range data,
+non-zero reserved fields, and bytes outside zero or the exact maker padding
+pattern. The setup version resource is pinned, and its single `DATA/131`
+resource must be a four-entry safe ZIP whose package, `RELEASES`, `Update.exe`,
+and background bytes match their approved siblings. Its local headers,
+compressed ranges, central directory, and EOCD are walked directly: names,
+flags, methods, lengths, CRC-32, and offsets must agree; extras, comments,
+attributes, gaps, and trailing bytes are rejected. The `.nupkg` copy of
+`squirrel.exe` must match the approved input. The resource-modified execution
+stub must retain the approved fixed PE origin, while all 52 resource keys and
+bytes must match the verified packaged application executable. NuGet's nuspec,
+content types, and core-properties XML are byte-pinned; relationships XML is
+matched to an exact canonical structure with only its two bounded random IDs
+and randomized core-properties path allowed. Passing evidence
+is written atomically, without timestamps or absolute paths, to
+`out/<build-id>/evidence/SQUIRREL-MAKER-PROVENANCE.json`.
+
+These checks establish a constrained semantic transform from the pinned maker
+package subtree to the inspected unsigned output container. They do not pin
+root-hoisted build-dependency bytes or the excluded log contents, establish
+build-host safety or bit-for-bit reproducibility, establish that the MIT
+declaration or license text is
+sufficient for every bundled component, add the maker layer to the payload
+SBOM/notices, or approve publication.
+The outputs remain unsigned, draft-only, and prohibited from public release
+while the license hold applies.
+
+The `.nupkg` checks currently consume central-directory semantics through .NET
+and `yauzl`. They do not yet prove that every raw local header matches its
+central record. A strict raw nupkg walker is therefore still required before a
+public release; the strict Setup ZIP walker does not remove that separate
+parser-differential boundary.
 
 The audit is specifically an **application-payload** audit. During make,
 Squirrel adds `lib/net45/squirrel.exe`,
 `lib/net45/OwnContextDeveloperPreview_ExecutionStub.exe`, and package metadata
 to the `.nupkg`; `Setup.exe` also carries maker-generated bootstrap/update
-bytes. Those maker-added components are not inventoried by the payload SPDX
-document, third-party notices, or `SHA256SUMS`. Public release therefore
-requires a second inventory and license/provenance review for the maker-added
-`.nupkg`, setup, and update components, plus exact outer-container extraction
-evidence.
+bytes. The provenance gate now checks the executable origins and outer-container
+mapping described above. Those maker-added components are still not inventoried
+by the payload SPDX document, third-party notices, or `SHA256SUMS`; a complete
+maker-layer license/SBOM/notices review remains a public-release gate.
 
 ## Enforced checks
 
@@ -130,6 +172,12 @@ The tool fails closed when:
 - a file is changed, removed, or added after `SHA256SUMS` generation; or
 - the Squirrel full package omits or changes a verified payload file, or adds a
   file outside its explicit maker and NuGet metadata allowlist; or
+- the pinned `electron-winstaller` installed file tree or a named input changes,
+  the maker output inventory is
+  not exact, `RELEASES` is malformed or mismatched, a setup ZIP member differs,
+  a fixed PE byte changes, a derived PE layout value is inconsistent, resource
+  metadata/padding is unexplained, or the execution stub does not copy the
+  packaged application's resources exactly; or
 - non-draft use finds the project license unresolved.
 
 Electron is intentionally declared as a development dependency because its
@@ -154,10 +202,15 @@ This foundation does not yet prove:
 - that codec patent obligations are satisfied in every target jurisdiction;
 - that anonymous code flattened into a bundle came only from production
   dependencies when no package path, manifest, or bundler provenance remains;
-- that the setup executable's embedded Squirrel payload has been independently
-  extracted and byte-compared with the verified `.nupkg`;
 - that Squirrel's maker-added execution stub, bootstrap/update components, and
-  package metadata are covered by complete notices, SBOM, and checksums;
+  package metadata are covered by complete notices, SBOM, and release checksums
+  beyond the draft provenance record;
+- that every raw `.nupkg` local header, extra field, compressed range, and gap
+  exactly agrees with its central-directory record without parser differential;
+- that the locked development toolchain is advisory-clean: the packaged runtime
+  currently passes `npm audit --omit=dev`, while the full audit still fails in
+  Electron Forge's archive/extraction dependency tree and has no verified
+  semver-compatible stable upgrade;
 - that an installer is signed, reproducible, encrypted at rest, or safe; or
 - that a future installer format can be inspected without extraction.
 

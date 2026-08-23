@@ -6,6 +6,7 @@ import {
   FORGE_BUILD_ID_ENV,
   resolveForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
+import { verifyPinnedSquirrelMakerInputs } from "./squirrel-maker-provenance.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(scriptsDirectory, "..");
@@ -20,6 +21,16 @@ const forgeCli = resolve(
 );
 const complianceCli = resolve(projectRoot, "scripts", "release-compliance.mjs");
 const smokeScript = resolve(scriptsDirectory, "smoke-packaged.mjs");
+const makerInputManifest = resolve(
+  desktopDirectory,
+  "packaging",
+  "squirrel-maker-inputs.json",
+);
+const electronWinstallerDirectory = resolve(
+  projectRoot,
+  "node_modules",
+  "electron-winstaller",
+);
 const buildIdentifier = resolveForgeBuildIdentifier();
 const buildDirectory = resolve(desktopDirectory, "out", buildIdentifier);
 const packagedDirectory = resolve(
@@ -88,7 +99,19 @@ async function run(label, args) {
   });
 }
 
+async function verifyMakerInputs(label) {
+  process.stdout.write(`\n[OwnContext make] ${label}\n`);
+  await verifyPinnedSquirrelMakerInputs({
+    manifestPath: makerInputManifest,
+    electronWinstallerDirectory,
+  });
+}
+
 await requireMissingBuildDirectory();
+
+if (!packageOnly) {
+  await verifyMakerInputs("verify pinned Squirrel maker package before Forge loads it");
+}
 
 await run("package Windows x64 application", [
   forgeCli,
@@ -125,6 +148,7 @@ await run("verify draft compliance evidence", [
 ]);
 
 if (!packageOnly) {
+  await verifyMakerInputs("re-verify pinned Squirrel maker package immediately before make");
   await run("make Squirrel.Windows artifacts from the verified package", [
     forgeCli,
     "make",

@@ -58,9 +58,10 @@ function ancestors(path) {
 }
 
 /**
- * Prove that the Squirrel full package contains the complete verified
- * application payload byte-for-byte, with only an explicit maker layer and
- * NuGet metadata outside that mapping.
+ * Prove, using the caller's central-directory inventory, that the Squirrel full
+ * package exposes the complete verified application payload byte-for-byte,
+ * with only an explicit maker layer and NuGet metadata outside that mapping.
+ * Raw local-header equivalence is a separate release gate.
  */
 export function verifySquirrelPackageInventory({
   payloadFiles,

@@ -129,9 +129,13 @@ Deliverables:
 
 - Multilingual lexical benchmark and optional local dense retrieval.
 - Encryption for database, indexes, temporary files, and backups.
-- Draft application-payload notices, SPDX SBOM, and checksums are implemented;
-  OS keychain integration, signed updates, complete outer-installer provenance,
-  and parser isolation remain release work.
+- Draft application-payload notices, SPDX SBOM, checksums, and constrained
+  outer-installer transform provenance are implemented; OS keychain integration,
+  signed updates, complete maker-layer license evidence, and parser isolation
+  remain release work.
+- Keep build hosts isolated while the stable Electron Forge dependency tree has
+  unresolved archive/extraction advisories; accept an upgrade only after the
+  complete Windows make and smoke matrix passes.
 - Cross-vault leakage, prompt-injection impact, deletion, export, and log regression suites.
 
 Acceptance:

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "electron-winstaller",
+    "version": "5.4.4",
+    "license": "MIT"
+  },
+  "packageTree": {
+    "fileCount": 96,
+    "totalBytes": 32192898,
+    "sha256": "cdc02edf52fcb51c9a1072f0e57a97bddae9bd1241d49cd90e979c77d338a504",
+    "excludedMutableFiles": [
+      "vendor/Squirrel-Releasify.log",
+      "vendor/Squirrel-Unset.log"
+    ]
+  },
+  "files": [
+    {
+      "role": "packageMetadata",
+      "path": "package.json",
+      "length": 1658,
+      "sha256": "511259968528a6593e28aa24e9d703e5da82eec07efd7c2b452ea3869330705a"
+    },
+    {
+      "role": "packageLicense",
+      "path": "LICENSE",
+      "length": 1055,
+      "sha256": "379ecb81d11a2c2a72225e0cf8cd04803b220da64e1668042ddd0d04bd1c8666"
+    },
+    {
+      "role": "setupBootstrap",
+      "path": "vendor/Setup.exe",
+      "length": 223232,
+      "sha256": "1e47eb606dad4c5c1568cfb8f4e970e1051ba5806aedb1ff3256284a8280d83b"
+    },
+    {
+      "role": "squirrelExecutable",
+      "path": "vendor/Squirrel.exe",
+      "length": 1899520,
+      "sha256": "76359cd4b0349a83337b941332ad042c90351c2bb0a4628307740324c97984cc"
+    },
+    {
+      "role": "executionStub",
+      "path": "vendor/StubExecutable.exe",
+      "length": 288768,
+      "sha256": "d823e6d954f7e445fbbb5c04e40a39cf248a3621f9eccbafdf3f0f1e7acb11dd"
+    },
+    {
+      "role": "installSpinner",
+      "path": "resources/install-spinner.gif",
+      "length": 44410,
+      "sha256": "ce636d201ef86ffbf4ee8c8762b4d9dc255be9d5f490d0a22e36fe0c938f7244"
+    }
+  ]
+}
