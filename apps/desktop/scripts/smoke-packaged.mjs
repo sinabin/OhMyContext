@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
+  lstat,
   readdir,
   readFile,
   rm,
@@ -24,12 +25,20 @@ import {
   FORGE_BUILD_ID_ENV,
   validateForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
+import { verifySquirrelPackageInventory } from "./squirrel-package-inventory.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(scriptsDirectory, "..");
 const projectRoot = resolve(desktopDirectory, "..", "..");
 const outDirectory = resolve(desktopDirectory, "out");
 const requireMaker = process.argv.includes("--require-maker");
+const squirrelPackageName = "OwnContextDeveloperPreview";
+const applicationExecutableName = "OwnContextDeveloperPreview.exe";
+const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
+const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;
+const maxNupkgUncompressedBytes = 8 * 1024 * 1024 * 1024;
+const maxNupkgEntries = 20_000;
+const nupkgInspectionTimeoutMs = 60_000;
 const complianceNames = [
   "THIRD_PARTY_NOTICES.txt",
   "SBOM.spdx.json",
@@ -102,21 +111,29 @@ async function findPackagedDirectory() {
   return dated[0].candidate;
 }
 
-function inspectNupkgCompliance(nupkgPath) {
+function inspectNupkgEntries(nupkgPath) {
   const powershell = [
     "$ErrorActionPreference = 'Stop'",
     "Add-Type -AssemblyName System.IO.Compression.FileSystem",
     "$path = [Environment]::GetEnvironmentVariable('OWNCONTEXT_SMOKE_NUPKG_PATH')",
+    `$maxCompressedBytes = [int64]${maxNupkgCompressedBytes}`,
+    `$maxEntryBytes = [int64]${maxNupkgEntryBytes}`,
+    `$maxUncompressedBytes = [int64]${maxNupkgUncompressedBytes}`,
+    `$maxEntries = ${maxNupkgEntries}`,
+    "if ((Get-Item -LiteralPath $path).Length -gt $maxCompressedBytes) { throw 'Squirrel package exceeds compressed-size limit.' }",
     "$archive = [System.IO.Compression.ZipFile]::OpenRead($path)",
     "try {",
+    "  if ($archive.Entries.Count -gt $maxEntries) { throw 'Squirrel package exceeds entry-count limit.' }",
+    "  $totalLength = [int64]0",
     "  $items = @()",
     "  foreach ($entry in $archive.Entries) {",
-    "    if ($entry.FullName -like 'lib/net45/resources/compliance/*' -and $entry.Length -gt 0) {",
-    "      $stream = $entry.Open()",
-    "      $sha = [System.Security.Cryptography.SHA256]::Create()",
-    "      try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose(); $stream.Dispose() }",
-    "      $items += [PSCustomObject]@{ name = $entry.FullName; length = $entry.Length; sha256 = $hash }",
-    "    }",
+    "    if ($entry.Length -lt 0 -or $entry.Length -gt $maxEntryBytes) { throw 'Squirrel package entry exceeds size limit.' }",
+    "    $totalLength += $entry.Length",
+    "    if ($totalLength -gt $maxUncompressedBytes) { throw 'Squirrel package exceeds uncompressed-size limit.' }",
+    "    $stream = $entry.Open()",
+    "    $sha = [System.Security.Cryptography.SHA256]::Create()",
+    "    try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose(); $stream.Dispose() }",
+    "    $items += [PSCustomObject]@{ name = $entry.FullName; length = $entry.Length; sha256 = $hash; directory = ($entry.Name.Length -eq 0) }",
     "  }",
     "  [Console]::Out.Write((ConvertTo-Json -InputObject @($items) -Compress))",
     "} finally { $archive.Dispose() }",
@@ -131,6 +148,7 @@ function inspectNupkgCompliance(nupkgPath) {
         OWNCONTEXT_SMOKE_NUPKG_PATH: nupkgPath,
       },
       maxBuffer: 4 * 1024 * 1024,
+      timeout: nupkgInspectionTimeoutMs,
       windowsHide: true,
     },
   );
@@ -147,18 +165,54 @@ function inspectNupkgCompliance(nupkgPath) {
     typeof entry === "object" &&
     typeof entry.name === "string" &&
     Number.isSafeInteger(entry.length) &&
-    typeof entry.sha256 === "string"
+    typeof entry.sha256 === "string" &&
+    typeof entry.directory === "boolean"
   )) {
     throw new Error("The Squirrel package compliance inventory is malformed.");
   }
-  return entries.map((entry) => ({
-    ...entry,
-    name: entry.name.replaceAll("\\", "/"),
-  }));
+  // Preserve the archive spelling exactly. The verifier deliberately rejects
+  // backslashes and other non-canonical ZIP paths instead of normalizing an
+  // unsafe entry into an expected payload path.
+  return entries;
 }
 
 async function sha256File(path) {
   return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function inventoryPackagedFiles(root) {
+  const files = [];
+  const directories = [root];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    if (!directory) continue;
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name, "en-US"));
+    for (const entry of entries) {
+      const absolutePath = resolve(directory, entry.name);
+      const metadata = await lstat(absolutePath);
+      const relativePath = relative(root, absolutePath).split(sep).join("/");
+      if (metadata.isSymbolicLink()) {
+        throw new Error(`Packaged payload contains a symbolic link: ${relativePath}`);
+      }
+      if (metadata.isDirectory()) {
+        directories.push(absolutePath);
+      } else if (metadata.isFile()) {
+        files.push({
+          relativePath,
+          length: metadata.size,
+          sha256: await sha256File(absolutePath),
+        });
+      } else {
+        throw new Error(`Packaged payload contains a special file: ${relativePath}`);
+      }
+    }
+  }
+  files.sort((left, right) => left.relativePath.localeCompare(
+    right.relativePath,
+    "en-US",
+  ));
+  return files;
 }
 
 async function runGuiSmoke(executable, temporaryRoot) {
@@ -218,7 +272,7 @@ if (process.platform !== "win32" || process.arch !== "x64") {
 
 const packagedDirectory = await findPackagedDirectory();
 const buildDirectory = dirname(packagedDirectory);
-const executable = resolve(packagedDirectory, "OwnContextDeveloperPreview.exe");
+const executable = resolve(packagedDirectory, applicationExecutableName);
 const resources = resolve(packagedDirectory, "resources");
 const asarPath = resolve(resources, "app.asar");
 const mcpEntry = resolve(resources, "mcp-server", "cli.mjs");
@@ -261,9 +315,16 @@ if (requireMaker) {
   }
   const nupkgPath = resolve(
     makerDirectory,
-    "OwnContextDeveloperPreview-0.0.0-full.nupkg",
+    `${squirrelPackageName}-0.0.0-full.nupkg`,
   );
-  const nupkgEntries = inspectNupkgCompliance(nupkgPath);
+  const nupkgEntries = inspectNupkgEntries(nupkgPath);
+  const payloadFiles = await inventoryPackagedFiles(packagedDirectory);
+  verifySquirrelPackageInventory({
+    payloadFiles,
+    nupkgEntries,
+    packageName: squirrelPackageName,
+    applicationExecutableName,
+  });
   for (const [index, complianceName] of complianceNames.entries()) {
     const expectedEntry = `lib/net45/resources/compliance/${complianceName}`;
     const embedded = nupkgEntries.find((entry) => entry.name === expectedEntry);

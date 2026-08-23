@@ -71,6 +71,16 @@ const config = {
         authors: "OwnContext project contributors",
         description:
           "Unsigned developer preview for non-sensitive OwnContext evaluation data.",
+        // electron-winstaller's default NuSpec template omits these two
+        // extensionless/HTML Electron payload files. Keep the installed image
+        // byte-equivalent to the package that compliance inspected.
+        additionalFiles: [
+          {
+            src: "LICENSES.chromium.html",
+            target: "lib\\net45\\LICENSES.chromium.html",
+          },
+          { src: "version", target: "lib\\net45\\version" },
+        ],
         noMsi: true,
         setupExe: "OwnContext-Developer-Preview-Unsigned-Setup.exe",
       },

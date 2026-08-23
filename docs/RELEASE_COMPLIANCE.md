@@ -12,11 +12,23 @@ OwnContext workspace.
 
 Compliance is evaluated against the **unpacked application payload**, not a
 source tree and not a declared dependency list alone. Run the tool before the
-maker and require that those verified application files enter the `.nupkg`
-unchanged. Squirrel also adds its own files, so this application-payload result
-does not describe the complete maker output. Before publication, extract the
-setup artifact and verify both the application payload and the separately
-inventoried maker layer.
+maker and require that every verified application file enters the `.nupkg`
+unchanged. The integrated Squirrel smoke test maps the complete regular-file
+inventory to `lib/net45` by relative path, size, and SHA-256. It fails on a
+missing or changed payload file and on any file outside the explicit
+Squirrel/NuGet allowlist. Archive entry names are compared without path
+normalization, so backslashes, traversal segments, and case changes fail rather
+than being rewritten into an expected path. Inspection also applies bounded
+compressed size, entry count, individual and total uncompressed size, output,
+and execution time. Squirrel also adds its own files, so this application-payload
+result does not describe the complete maker output. Before
+publication, extract the setup artifact and verify both the application payload
+and the separately inventoried maker layer.
+
+`electron-winstaller`'s default NuSpec template does not include Electron's
+`LICENSES.chromium.html` or extensionless `version` file. The Forge maker
+configuration stages both explicitly; the complete-inventory comparison is the
+regression guard that proves they remain present in the full package.
 
 Electron ASAR archives are inspected with the locked `@electron/asar` build
 tool: the checker walks archive paths, rejects links and unsafe paths, and reads
@@ -75,9 +87,13 @@ npm run make --workspace @owncontext/desktop
 The orchestrator validates and pins one `OWNCONTEXT_FORGE_BUILD_ID`, creates the
 unpacked package, generates and verifies draft evidence under
 `resources/compliance`, and only then runs Forge make with `--skip-package`.
-The final smoke test re-verifies the unpacked payload and byte-compares all three
-compliance files against their entries in the Squirrel `.nupkg` using size and
-SHA-256. This proves the inspected `.nupkg` contains the verified evidence.
+The final smoke test re-verifies the unpacked payload and byte-compares every
+regular payload file against its Squirrel `.nupkg` entry using relative path,
+size, and SHA-256. The two maker-added executable files and four NuGet metadata
+files are required through a separate, fail-closed allowlist. The three
+compliance files also receive named checks so their evidence boundary stays
+visible. This proves the inspected `.nupkg` contains the complete verified
+application payload unchanged; it does not audit the allowed maker bytes.
 
 The current automated smoke does not independently parse the setup executable's
 embedded PE payload. `Setup.exe` is made in the same Forge invocation from the
@@ -112,6 +128,8 @@ The tool fails closed when:
   installed license text;
 - the notices or SPDX package/file inventory no longer match their evidence;
 - a file is changed, removed, or added after `SHA256SUMS` generation; or
+- the Squirrel full package omits or changes a verified payload file, or adds a
+  file outside its explicit maker and NuGet metadata allowlist; or
 - non-draft use finds the project license unresolved.
 
 Electron is intentionally declared as a development dependency because its
