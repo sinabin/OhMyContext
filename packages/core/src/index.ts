@@ -1,9 +1,20 @@
 export { HASH_ID_PATTERN, deterministicId } from "./ids.js";
 export {
   createNodeSqliteDevelopmentStorageProvider,
+  ENCRYPTED_VAULT_KEY_BYTES,
+  EncryptedVaultCandidateError,
+  validateEncryptedVaultCandidateProvider,
   validateVaultStorageProvider,
 } from "./storage.js";
 export type {
+  EncryptedVaultCandidateErrorCode,
+  EncryptedVaultCandidateOpenRequest,
+  EncryptedVaultCandidateProvider,
+  EncryptedVaultCandidateSession,
+  EncryptedVaultCipherAttestation,
+  EncryptedVaultOpenMode,
+  EncryptedVaultStorageDescriptor,
+  PlaintextVaultStorageDescriptor,
   VaultStorageConnection,
   VaultStorageDescriptor,
   VaultStorageProvider,
@@ -24,6 +35,7 @@ export {
   listRetrievalActivity,
   listSources,
   MAX_RETRIEVAL_ACTIVITY_RESULTS,
+  openEncryptedVaultCandidate,
   openVault,
   prepareDirectoryImport,
   prepareSourcePurge,
@@ -32,6 +44,7 @@ export {
   searchVault,
   verifyDeletionReceipt,
 } from "./vault.js";
+export type { OpenEncryptedVaultCandidateOptions } from "./vault.js";
 export { MAX_RETRIEVAL_ACTIVITY_ROWS } from "./schema.js";
 export {
   OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,

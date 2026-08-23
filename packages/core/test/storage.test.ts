@@ -7,7 +7,7 @@ import {
   createNodeSqliteDevelopmentStorageProvider,
   openVault,
   type Vault,
-  type VaultStorageDescriptor,
+  type PlaintextVaultStorageDescriptor,
   type VaultStorageProvider,
 } from "../src/index.js";
 
@@ -43,7 +43,7 @@ describe("vault storage provider boundary", () => {
 
   it("takes an immutable descriptor snapshot when opening the vault", () => {
     const developmentProvider = createNodeSqliteDevelopmentStorageProvider();
-    const descriptor: VaultStorageDescriptor = {
+    const descriptor: PlaintextVaultStorageDescriptor = {
       providerId: "test-plaintext-provider",
       securityProfile: "plaintext-development",
       atRestEncryption: "none",

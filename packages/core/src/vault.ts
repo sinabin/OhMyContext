@@ -24,8 +24,15 @@ import {
   pruneRetrievalActivityRows,
 } from "./schema.js";
 import {
+  ENCRYPTED_VAULT_KEY_BYTES,
+  EncryptedVaultCandidateError,
   snapshotVaultStorageDescriptor,
+  validateEncryptedVaultCandidateProvider,
   validateVaultStorageProvider,
+  type EncryptedVaultCandidateOpenRequest,
+  type EncryptedVaultCandidateProvider,
+  type EncryptedVaultCandidateSession,
+  type EncryptedVaultOpenMode,
   type VaultStorageConnection,
   type VaultStorageDescriptor,
   type VaultStorageProvider,
@@ -98,6 +105,12 @@ interface VaultState {
   db: VaultStorageConnection;
   closed: boolean;
   importingSources: Set<string>;
+}
+
+export interface OpenEncryptedVaultCandidateOptions {
+  /** Borrowed raw bytes; ownership and zeroization remain with the caller. */
+  readonly key: Buffer;
+  readonly mode: EncryptedVaultOpenMode;
 }
 
 interface CandidateFile {
@@ -341,6 +354,237 @@ export function openVault(
     throw error;
   }
   return new VaultHandle(resolvedPath, db, storage);
+}
+
+/**
+ * Opens a provider candidate only through the keyed, positively attested path.
+ *
+ * This boundary is deliberately separate from `openVault`: a descriptor is not
+ * encryption evidence, and this function does not provide a plaintext fallback.
+ * The provider owns the OS-level exclusive/existing-file semantics promised by
+ * the selected mode; candidate conformance tests must verify those semantics.
+ */
+export function openEncryptedVaultCandidate(
+  dbPath: string,
+  storageProvider: EncryptedVaultCandidateProvider,
+  options: OpenEncryptedVaultCandidateOptions,
+): Vault {
+  const validatedOptions = readEncryptedVaultCandidateOptions(options);
+  if (
+    typeof dbPath !== "string" ||
+    dbPath.trim().length === 0 ||
+    dbPath === ":memory:" ||
+    dbPath.includes("\0") ||
+    !validatedOptions
+  ) {
+    throw new EncryptedVaultCandidateError("INVALID_REQUEST");
+  }
+
+  let provider: EncryptedVaultCandidateProvider;
+  let storage: VaultStorageDescriptor;
+  try {
+    provider = validateEncryptedVaultCandidateProvider(storageProvider);
+    storage = snapshotVaultStorageDescriptor(provider.descriptor);
+    if (
+      !/^[a-z0-9][a-z0-9.-]{2,63}$/u.test(storage.providerId) ||
+      storage.securityProfile !== "encrypted-candidate" ||
+      storage.atRestEncryption !== "provider-managed" ||
+      storage.keyManagement !== "os-protected"
+    ) {
+      throw new Error("Invalid encrypted descriptor snapshot.");
+    }
+  } catch {
+    throw new EncryptedVaultCandidateError("INVALID_PROVIDER");
+  }
+
+  let resolvedPath: string;
+  try {
+    resolvedPath = resolve(dbPath);
+  } catch {
+    throw new EncryptedVaultCandidateError("INVALID_REQUEST");
+  }
+  const request = Object.freeze({
+    location: resolvedPath,
+    key: validatedOptions.key,
+    mode: validatedOptions.mode,
+  } satisfies EncryptedVaultCandidateOpenRequest);
+
+  let session: EncryptedVaultCandidateSession;
+  try {
+    session = provider.openKeyed(request);
+  } catch {
+    throw new EncryptedVaultCandidateError("OPEN_FAILED");
+  }
+
+  const capturedConnection = captureCandidateConnection(session);
+  const db = capturedConnection.connection;
+  if (!db || !hasCandidateSessionMethods(session)) {
+    closeCandidateConnection(capturedConnection.close);
+    throw new EncryptedVaultCandidateError("OPEN_FAILED");
+  }
+
+  try {
+    const attestation = session.attestCipher();
+    if (!isActiveCipherAttestation(attestation)) {
+      throw new Error("Cipher is not active.");
+    }
+  } catch {
+    closeCandidateConnection(capturedConnection.close);
+    throw new EncryptedVaultCandidateError("CIPHER_ATTESTATION_FAILED");
+  }
+
+  let inspectedSchemaVersion: number;
+  try {
+    if (typeof session.inspectSchemaVersion !== "function") {
+      throw new Error("Schema inspection is unavailable.");
+    }
+    inspectedSchemaVersion = session.inspectSchemaVersion();
+    assertSupportedSchemaVersion(inspectedSchemaVersion);
+  } catch {
+    closeCandidateConnection(capturedConnection.close);
+    throw new EncryptedVaultCandidateError("SCHEMA_INSPECTION_FAILED");
+  }
+
+  try {
+    initializeSchema(db, inspectedSchemaVersion);
+  } catch {
+    closeCandidateConnection(capturedConnection.close);
+    throw new EncryptedVaultCandidateError("INITIALIZATION_FAILED");
+  }
+
+  return new VaultHandle(resolvedPath, db, storage);
+}
+
+interface CapturedCandidateConnection {
+  readonly connection?: VaultStorageConnection;
+  readonly close?: () => void;
+}
+
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  "byteLength",
+)?.get;
+
+function readEncryptedVaultCandidateOptions(
+  value: unknown,
+): OpenEncryptedVaultCandidateOptions | undefined {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    const candidate = value as Record<string, unknown>;
+    const key = candidate.key;
+    const mode = candidate.mode;
+    if (
+      !Buffer.isBuffer(key) ||
+      intrinsicBufferByteLength(key) !== ENCRYPTED_VAULT_KEY_BYTES ||
+      (mode !== "open-existing" && mode !== "create-exclusive")
+    ) {
+      return undefined;
+    }
+    return Object.freeze({ key, mode });
+  } catch {
+    return undefined;
+  }
+}
+
+function intrinsicBufferByteLength(value: Buffer): number | undefined {
+  try {
+    if (typeof TYPED_ARRAY_BYTE_LENGTH_GETTER !== "function") return undefined;
+    const byteLength = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH_GETTER, value, []);
+    return Number.isSafeInteger(byteLength) && byteLength >= 0
+      ? byteLength
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureCandidateConnection(
+  session: unknown,
+): CapturedCandidateConnection {
+  let connection: Record<string, unknown>;
+  try {
+    if (typeof session !== "object" || session === null || Array.isArray(session)) {
+      return Object.freeze({});
+    }
+    const candidate = (session as { connection?: unknown }).connection;
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      Array.isArray(candidate)
+    ) {
+      return Object.freeze({});
+    }
+    connection = candidate as Record<string, unknown>;
+  } catch {
+    return Object.freeze({});
+  }
+
+  let closeMethod: unknown;
+  try {
+    closeMethod = connection.close;
+  } catch {
+    return Object.freeze({});
+  }
+  if (typeof closeMethod !== "function") return Object.freeze({});
+  const close = () => Reflect.apply(closeMethod, connection, []);
+
+  let execMethod: unknown;
+  let prepareMethod: unknown;
+  try {
+    execMethod = connection.exec;
+    prepareMethod = connection.prepare;
+  } catch {
+    return Object.freeze({ close });
+  }
+  if (typeof execMethod !== "function" || typeof prepareMethod !== "function") {
+    return Object.freeze({ close });
+  }
+
+  const facade: VaultStorageConnection = Object.freeze({
+    close,
+    exec: (sql: string) => Reflect.apply(execMethod, connection, [sql]),
+    prepare: (sql: string) =>
+      Reflect.apply(prepareMethod, connection, [sql]) as ReturnType<
+        VaultStorageConnection["prepare"]
+      >,
+  });
+  return Object.freeze({ connection: facade, close });
+}
+
+function hasCandidateSessionMethods(session: unknown): boolean {
+  try {
+    return typeof session === "object" &&
+      session !== null &&
+      !Array.isArray(session) &&
+      typeof (session as { attestCipher?: unknown }).attestCipher === "function" &&
+      typeof (session as { inspectSchemaVersion?: unknown }).inspectSchemaVersion === "function";
+  } catch {
+    return false;
+  }
+}
+
+function isActiveCipherAttestation(value: unknown): boolean {
+  try {
+    return typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 1 &&
+      (value as { status?: unknown }).status === "active";
+  } catch {
+    return false;
+  }
+}
+
+function closeCandidateConnection(
+  close: (() => void) | undefined,
+): void {
+  try {
+    close?.();
+  } catch {
+    // Preserve the stable content-free candidate error selected by the caller.
+  }
 }
 
 export function importDirectory(
