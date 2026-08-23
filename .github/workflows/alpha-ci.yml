@@ -20,6 +20,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
+      # Fail before checkout/build if this label is ever attached to a
+      # persistent runner. The installer step repeats this gate at runtime.
+      - name: Require a disposable GitHub-hosted Windows runner
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: pwsh
+        run: throw 'This workflow may run only on a GitHub-hosted disposable windows-latest runner.'
+
       - name: Check out the exact source revision
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -28,6 +35,10 @@ jobs:
         with:
           node-version: 22.13.0
           cache: npm
+
+      - name: Statically validate the installed-lifecycle safety boundary
+        shell: pwsh
+        run: .github/scripts/Test-InstalledLifecycleSmokeStatic.ps1
 
       - name: Install locked dependencies
         run: npm ci
@@ -52,6 +63,18 @@ jobs:
         shell: pwsh
         run: npm run release:bundle:verify -- --build "$env:OWNCONTEXT_BUILD_DIR"
 
+      - name: Exercise the actual installed Squirrel lifecycle
+        if: ${{ runner.environment == 'github-hosted' }}
+        shell: pwsh
+        env:
+          OWNCONTEXT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          OWNCONTEXT_RUNNER_LABEL: windows-latest
+          OWNCONTEXT_DISPOSABLE_RUNNER_ACK: github-hosted-windows-latest-disposable
+        run: >-
+          & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1
+          -BuildDirectory "$env:OWNCONTEXT_BUILD_DIR"
+          -ExecuteDisposableGitHubHostedLifecycle
+
       # An unsigned executable must not become a downloadable artifact merely
       # because this verification workflow is later copied into a public repo.
       - name: Retain the private-repository alpha bundle briefly
@@ -64,4 +87,5 @@ jobs:
           path: |
             ${{ env.OWNCONTEXT_BUILD_DIR }}/make/squirrel.windows/x64/*
             ${{ env.OWNCONTEXT_BUILD_DIR }}/evidence/*
+            ${{ env.OWNCONTEXT_BUILD_DIR }}/ci-evidence/*
             ${{ env.OWNCONTEXT_BUILD_DIR }}/OwnContext Developer Preview-win32-x64/resources/compliance/*
