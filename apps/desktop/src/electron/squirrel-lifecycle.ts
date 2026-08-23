@@ -1,17 +1,20 @@
 import { spawn } from "node:child_process";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type {
-  CodexConfigMutationResult,
   CodexConfigService,
   OwnContextMcpLaunch,
 } from "./codex-config.js";
+import type { ClaudeCodeConfigService } from "./claude-code-config.js";
 
 export type SquirrelEvent = "install" | "updated" | "uninstall" | "obsolete";
 export type SquirrelStage =
   | "config-service"
   | "launch"
   | "refresh-managed"
+  | "refresh-claude-managed"
   | "remove-managed"
+  | "claude-config-service"
+  | "remove-claude-managed"
   | "create-shortcut"
   | "remove-shortcut";
 
@@ -31,6 +34,8 @@ export interface SquirrelLifecycleOptions {
   argv: readonly string[];
   executablePath: string;
   createConfigService: () => CodexConfigService;
+  /** Optional until a release includes the Claude Code integration. */
+  createClaudeCodeConfigService?: () => ClaudeCodeConfigService;
   createLaunch: () => OwnContextMcpLaunch;
   runUpdate: (args: readonly string[]) => Promise<void>;
   quit: () => void;
@@ -57,7 +62,10 @@ export function detectSquirrelEvent(
   return EVENT_BY_ARGUMENT.get(argv[1] ?? "");
 }
 
-function mutationFailureCode(result: CodexConfigMutationResult): string | undefined {
+function mutationFailureCode(result: {
+  ok: boolean;
+  code: string;
+}): string | undefined {
   return result.ok ? undefined : result.code;
 }
 
@@ -112,6 +120,23 @@ export function beginSquirrelLifecycle(
             if (failureCode) recordFailure("refresh-managed", failureCode);
           }
         }
+        if (options.createClaudeCodeConfigService && launch.ok) {
+          const claudeService = await attempt(
+            "claude-config-service",
+            options.createClaudeCodeConfigService,
+          );
+          if (claudeService.ok) {
+            const refreshed = await attempt("refresh-claude-managed", () =>
+              claudeService.value.refreshManaged(launch.value),
+            );
+            if (refreshed.ok) {
+              const failureCode = mutationFailureCode(refreshed.value);
+              if (failureCode) {
+                recordFailure("refresh-claude-managed", failureCode);
+              }
+            }
+          }
+        }
         await attempt("create-shortcut", () =>
           options.runUpdate([`--createShortcut=${shortcutTarget}`]),
         );
@@ -124,6 +149,21 @@ export function beginSquirrelLifecycle(
           if (removed.ok) {
             const failureCode = mutationFailureCode(removed.value);
             if (failureCode) recordFailure("remove-managed", failureCode);
+          }
+        }
+        if (options.createClaudeCodeConfigService) {
+          const claudeService = await attempt(
+            "claude-config-service",
+            options.createClaudeCodeConfigService,
+          );
+          if (claudeService.ok) {
+            const removed = await attempt("remove-claude-managed", () =>
+              claudeService.value.remove(),
+            );
+            if (removed.ok) {
+              const failureCode = mutationFailureCode(removed.value);
+              if (failureCode) recordFailure("remove-claude-managed", failureCode);
+            }
           }
         }
         await attempt("remove-shortcut", () =>

@@ -1,14 +1,17 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   HASH_ID_PATTERN,
+  OWNCONTEXT_SAMPLE_LIBRARY_FILES,
+  OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
   deterministicId,
   fetchDocument,
   importDirectory,
+  importOwnContextSampleLibrary,
   listDeletionReceipts,
   listSources,
   openVault,
@@ -18,6 +21,7 @@ import {
   searchVault,
   verifyDeletionReceipt,
   type Vault,
+  type ImportDirectoryOptions,
   type ImportProgress,
 } from "../src/index.js";
 
@@ -53,6 +57,79 @@ describe("deterministic IDs", () => {
 });
 
 describe("vault ingestion and retrieval", () => {
+  it("grants virtual sample provenance only after exact built-in verification", async () => {
+    const { root, dbPath, vault } = await fixture();
+    for (const file of OWNCONTEXT_SAMPLE_LIBRARY_FILES) {
+      await writeFile(join(root, file.name), file.content, "utf8");
+    }
+
+    const sampleSourceId = deterministicId(
+      "source",
+      "folder",
+      OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+      "default",
+    );
+    const legacySpoofDocumentId = deterministicId(
+      "document",
+      sampleSourceId,
+      "legacy-spoof.md",
+    );
+    const setup = new DatabaseSync(dbPath);
+    setup.prepare(`
+      INSERT INTO sources(
+        id, kind, root_uri, collection, display_name, created_at, last_scanned_at
+      ) VALUES (?, 'folder', ?, 'default', 'Spoofed sample', ?, ?)
+    `).run(
+      sampleSourceId,
+      OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+      "2026-08-23T00:00:00.000Z",
+      "2026-08-23T00:00:00.000Z",
+    );
+    setup.prepare(`
+      INSERT INTO documents(
+        id, source_id, relative_path, source_uri, title,
+        created_at, modified_at, current_revision_id
+      ) VALUES (?, ?, 'legacy-spoof.md', ?, 'Spoofed', ?, ?, NULL)
+    `).run(
+      legacySpoofDocumentId,
+      sampleSourceId,
+      `${OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT}legacy-spoof.md`,
+      "2026-08-23T00:00:00.000Z",
+      "2026-08-23T00:00:00.000Z",
+    );
+    setup.close();
+
+    const sample = await importOwnContextSampleLibrary(vault, root);
+    expect(sample.rootUri).toBe(OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT);
+    expect(sample.documents).toHaveLength(2);
+    expect(sample.documents.every((document) =>
+      document.sourceUri.startsWith(OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT)
+    )).toBe(true);
+    expect(listSources(vault)).toEqual([
+      expect.objectContaining({
+        sourceId: sampleSourceId,
+        name: "OwnContext Sample Library",
+        documentCount: 2,
+      }),
+    ]);
+
+    const otherRoot = await mkdtemp(join(tmpdir(), "owncontext-not-sample-"));
+    temporaryPaths.push(otherRoot);
+    await writeFile(join(otherRoot, "other.md"), "not a built-in sample", "utf8");
+    const spoofAttempt = await importDirectory(vault, otherRoot, {
+      provenanceRootUri: OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+    } as ImportDirectoryOptions);
+    expect(spoofAttempt.rootUri).toBe(pathToFileURL(`${otherRoot}${sep}`).href);
+    expect(spoofAttempt.documents[0]?.sourceUri).toBe(
+      pathToFileURL(join(otherRoot, "other.md")).href,
+    );
+
+    await writeFile(join(root, "getting-started.md"), "tampered\n", "utf8");
+    await expect(importOwnContextSampleLibrary(vault, root)).rejects.toThrow(
+      "bytes do not match",
+    );
+  });
+
   it("creates the required schema and imports UTF-8 markdown and text", async () => {
     const { root, dbPath, vault } = await fixture();
     await mkdir(join(root, "nested"));
@@ -226,6 +303,58 @@ describe("vault ingestion and retrieval", () => {
       query: "sharedneedle",
       modifiedFrom: "2025-01-01T00:00:00.000Z",
     })).toEqual([]);
+  });
+
+  it("keeps collection-scoped results stable when a denied collection changes", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "allowed.md"), "# Allowed\nsharedterm stays visible", "utf8");
+    await importDirectory(vault, root, { collection: "allowed" });
+    const before = searchVault(vault, {
+      query: "sharedterm",
+      collection: "allowed",
+    });
+
+    const deniedRoot = join(dirname(root), "denied-source");
+    await mkdir(deniedRoot);
+    for (let index = 0; index < 40; index += 1) {
+      await writeFile(
+        join(deniedRoot, `denied-${index}.md`),
+        `# Denied ${index}\nsharedterm denied corpus ${index}`,
+        "utf8",
+      );
+    }
+    await importDirectory(vault, deniedRoot, { collection: "denied" });
+    const after = searchVault(vault, {
+      query: "sharedterm",
+      collection: "allowed",
+    });
+
+    expect(before).toHaveLength(1);
+    expect(after).toEqual(before);
+    expect(after[0]?.score).toBeLessThan(0);
+    expect(JSON.stringify(after)).not.toContain("Denied");
+  });
+
+  it("keeps useful relevance ordering inside a scoped collection", async () => {
+    const { root, vault } = await fixture();
+    const titleHit = join(root, "title-hit.md");
+    const bodyHit = join(root, "body-hit.md");
+    await writeFile(titleHit, "# scopedrankingterm\nOlder but directly titled", "utf8");
+    await writeFile(bodyHit, "# Recent note\nA newer scopedrankingterm mention", "utf8");
+    const old = new Date("2024-01-01T00:00:00.000Z");
+    const recent = new Date("2026-01-01T00:00:00.000Z");
+    await utimes(titleHit, old, old);
+    await utimes(bodyHit, recent, recent);
+    await importDirectory(vault, root, { collection: "allowed" });
+
+    const results = searchVault(vault, {
+      query: "scopedrankingterm",
+      collection: "allowed",
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results[0]?.title).toBe("scopedrankingterm");
+    expect(results[0]!.score).toBeLessThan(results[1]!.score);
   });
 
   it("purges all searchable revisions and makes stable fetch IDs unavailable", async () => {

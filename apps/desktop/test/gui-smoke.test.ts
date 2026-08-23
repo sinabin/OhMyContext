@@ -1,0 +1,112 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  prepareGuiSmoke,
+  runGuiSmokeJourney,
+  writeGuiSmokeSuccess,
+  type GuiSmokeRenderer,
+} from "../src/electron/gui-smoke.js";
+
+const nonce = "12345678-1234-4123-8123-123456789abc";
+
+describe("packaged GUI first-run smoke contract", () => {
+  const temporaryRoots: string[] = [];
+
+  afterEach(async () => {
+    for (const root of temporaryRoots.splice(0)) {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts bounded content-free evidence from the renderer journey", async () => {
+    const renderer: GuiSmokeRenderer = {
+      executeJavaScript: vi.fn(async (_script: string, _userGesture?: boolean) => ({
+        sampleSourceReady: true,
+        sampleSourceLabel: "OwnContext Sample Library",
+        suggestedQuery: "weekly review",
+        sampleProvenanceVerified: true,
+        resultCardCount: 1,
+      })),
+    };
+    const executeJavaScript = vi.mocked(renderer.executeJavaScript);
+
+    const evidence = await runGuiSmokeJourney(renderer);
+
+    expect(evidence).toEqual({
+      sampleSourceReady: true,
+      sampleSourceLabel: "OwnContext Sample Library",
+      suggestedQuery: "weekly review",
+      sampleProvenanceVerified: true,
+      resultCardCount: 1,
+    });
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(executeJavaScript.mock.calls[0]?.[1]).toBe(true);
+    const script = executeJavaScript.mock.calls[0]?.[0] ?? "";
+    expect(script).toContain("Try sample library");
+    expect(script).toContain("input[aria-label=\"Search personal context\"]");
+    expect(script).toContain("requestSubmit()");
+    expect(script).toContain(".result-card");
+  });
+
+  it.each([
+    undefined,
+    {},
+    {
+      sampleSourceReady: true,
+      sampleSourceLabel: "OwnContext Sample Library",
+      suggestedQuery: "weekly review",
+      sampleProvenanceVerified: true,
+      resultCardCount: 0,
+    },
+    {
+      sampleSourceReady: true,
+      sampleSourceLabel: "unexpected",
+      suggestedQuery: "weekly review",
+      sampleProvenanceVerified: true,
+      resultCardCount: 1,
+    },
+  ])("rejects invalid or unbounded renderer evidence: %o", async (value) => {
+    const renderer: GuiSmokeRenderer = {
+      executeJavaScript: async () => value,
+    };
+    await expect(runGuiSmokeJourney(renderer)).rejects.toThrow(
+      "first-run evidence is invalid",
+    );
+  });
+
+  it("records the completed journey only inside an isolated temporary root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "owncontext-gui-smoke-test-"));
+    temporaryRoots.push(root);
+    const context = prepareGuiSmoke(
+      ["OwnContext.exe", "--owncontext-gui-smoke"],
+      {
+        OWNCONTEXT_GUI_SMOKE_ROOT: root,
+        OWNCONTEXT_GUI_SMOKE_NONCE: nonce,
+      },
+      tmpdir(),
+    );
+    expect(context).toBeDefined();
+
+    writeGuiSmokeSuccess(context!, true, {
+      sampleSourceReady: true,
+      sampleSourceLabel: "OwnContext Sample Library",
+      suggestedQuery: "weekly review",
+      sampleProvenanceVerified: true,
+      resultCardCount: 2,
+    });
+
+    const result = JSON.parse(await readFile(context!.resultPath, "utf8"));
+    expect(result).toEqual({
+      status: "first-run-sample-search-complete",
+      nonce,
+      isPackaged: true,
+      sampleSourceReady: true,
+      sampleSourceLabel: "OwnContext Sample Library",
+      suggestedQuery: "weekly review",
+      sampleProvenanceVerified: true,
+      resultCardCount: 2,
+    });
+  });
+});

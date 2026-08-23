@@ -6,10 +6,14 @@ This Electron workspace is the first end-user vertical slice. It can:
 - show bounded, content-free import progress and cancel with a full rollback;
 - list source health and document counts;
 - search the local FTS index and inspect bounded document context;
+- import a bounded, non-sensitive built-in sample library without exposing its
+  physical application-data path to the renderer;
 - remove a source through a stale-safe preview, native confirmation, atomic
-  lineage purge, and persistent logical deletion receipt; and
+  lineage purge, and persistent logical deletion receipt;
 - preview, back up, apply, update, and remove one managed OwnContext block in
-  Codex's `~/.codex/config.toml`.
+  Codex's `~/.codex/config.toml`; and
+- preview, connect, refresh, and disconnect one managed, user-scoped OwnContext
+  entry for Claude Code.
 
 ## Run from the repository
 
@@ -22,8 +26,22 @@ npm start --workspace @owncontext/desktop
 ```
 
 The developer vault is stored under Electron's per-user application data
-directory. Codex receives that exact absolute vault path in the managed MCP
-environment; no vault path is accepted from renderer input.
+directory. Codex and Claude Code receive that exact absolute vault path and the
+single allowed collection, currently `default`, in the managed MCP environment;
+no vault path or collection grant is accepted from renderer input. The MCP
+server rejects a search request that names any other collection and permits
+`fetch` only for IDs issued on that connection.
+
+## Built-in sample boundary
+
+The first-run sample is materialized by the trusted main process under
+Electron's application-data directory from a fixed, hashed file inventory. Its
+user-facing document provenance uses the virtual
+`owncontext-sample://library/v1/` root, not a physical user-data path. The
+renderer invokes a parameterless sample-import action and cannot supply an
+arbitrary path or provenance URI. This trusted override is reserved for the
+built-in sample and does not create a general provenance-rewrite API for normal
+imports.
 
 ## Windows x64 unsigned installer
 
@@ -41,6 +59,11 @@ packages the application, generates and verifies draft compliance evidence,
 runs the Squirrel maker against that exact package with `--skip-package`, and
 finally runs the packaged smoke test. Outputs are created under a unique
 `apps/desktop/out/unsigned-*/make` directory.
+
+The generated preview has no payment or license-key gate and does not require
+Node.js on the target Windows x64 machine. That technical ability to make and
+run a free EXE does not grant public redistribution rights while the project
+license is unresolved.
 
 The unpacked application and the `.nupkg` both contain
 `resources/compliance/THIRD_PARTY_NOTICES.txt`, `SBOM.spdx.json`, and
@@ -115,20 +138,58 @@ must remain enabled for this preview. Disabling it without replacing the MCP
 launcher with a separately packaged runtime will break the connection. The
 packaged smoke test is the regression check for this constraint.
 
-Squirrel installation creates the shortcut but does not connect Codex. On an
-update, OwnContext atomically refreshes the managed Codex block only if it still
-exists, so a user's opt-out is not recreated. Uninstall removes only that
-managed block before removing the shortcut. Lifecycle failures are bounded and
-still terminate the Squirrel event process.
+Squirrel installation creates the shortcut but does not connect Codex or Claude
+Code. On an update, OwnContext refreshes each recognizable managed Codex or
+Claude Code grant only if it still exists, so a user's opt-out is not recreated.
+Uninstall removes only those recognizable managed grants before removing the
+shortcut. The initial Codex and Claude Code connections remain explicit user
+actions inside the running app.
+Lifecycle failures are bounded and still terminate the Squirrel event process.
 
 ## Configuration safety
 
-The renderer receives only the proposed OwnContext TOML block and a bounded
-status. It never receives the user's existing Codex configuration. The main
+The renderer receives only the proposed OwnContext TOML structure with private
+local paths redacted and a bounded status. It never receives the user's existing Codex configuration. The main
 process refuses unmanaged OwnContext conflicts, malformed markers, non-UTF-8 or
 oversized files, symbolic links, and concurrent changes. Before replacing an
 existing regular file, it creates an exclusive timestamped backup beside it.
 Disconnect removes only the marked block.
+
+Claude Code is connected as the user-scoped `owncontext` MCP server. The service
+respects an absolute `CLAUDE_CONFIG_DIR`, uses fixed CLI arguments without a
+shell command string, refuses an unmanaged/conflicting `owncontext` entry, and
+removes only an entry that still matches OwnContext's managed launch shape. The
+renderer receives only the generated OwnContext JSON structure with private
+local paths redacted and bounded status; it
+never receives unrelated Claude configuration. Before any mutation of an
+existing Claude configuration, the complete file is copied byte-for-byte to an
+exclusive adjacent backup. That whole-file backup can include unrelated secrets
+or account metadata and repeated mutations can accumulate backups. Encryption,
+retention limits, discoverability, and deletion are therefore public-release
+gates, not solved properties of this alpha. Windows DACL preservation and an
+OS-level race-safe replacement primitive are also unverified: the current
+compare-before-rename path is not claimed to be a filesystem compare-and-swap.
+Direct refresh/revoke rejects duplicate JSON keys, non-safe integers, and
+decimal/exponent numbers to avoid JavaScript numeric rewriting, but may normalize
+whitespace and escape spelling. Custom `CLAUDE_CONFIG_DIR` targets are not yet
+persisted across updater/uninstaller environment changes.
+
+After the external Claude CLI exits, times out, or exceeds its output limit,
+OwnContext re-reads the configuration under the same 4 MiB limit. It reports a
+successful connection only when the exact managed entry exists, every pre-existing
+top-level value is unchanged, no additional MCP server appeared, and any new
+top-level keys match the six bounded, non-executable bootstrap metadata shapes
+observed from the locally tested Claude Code CLI. Any deletion, rewrite, unknown
+grant, or unknown bootstrap field fails closed as `recovery_required`; the backup
+name is shown for manual recovery. Codex and Claude snapshot comparisons first
+reject a size change and then use a baseline-plus-one bounded handle read, so a
+concurrent oversized file is not loaded without limit. This does not close the
+documented OS-level compare-and-swap gate.
+
+Claude executable discovery is bounded to supported local candidates, but the
+alpha does not yet authenticate the executable's publisher, signature, hash,
+provenance, or compatible CLI version. Those checks are required before public
+distribution.
 
 The renderer remains sandboxed with context isolation and Node integration
 disabled. Its preload is emitted as one CommonJS file because sandboxed Electron
@@ -136,9 +197,21 @@ preloads do not support ESM imports.
 
 ## Important limitations
 
-This is a developer alpha, not a packaged consumer release. Application-level
-vault encryption, signed installers and updates, parser process isolation,
-access-history UI, and signed Claude Desktop Extension packaging remain release
-gates. Use non-sensitive fixture data only. A cloud AI client can send retrieved
-excerpts to its configured model provider even though storage and retrieval run
-locally.
+This is a developer alpha, not a packaged consumer release. Returned MCP rows
+are filtered to the launch-time allowed collection, but the vault currently
+uses one global FTS index: candidate work, cache effects, resource use, and
+response timing are not yet fully partitioned by collection. Physical candidate
+partitioning or an adequate non-interference test is a public-release gate.
+
+The packaged target is Windows x64. macOS support and numeric
+minimum/recommended hardware specifications remain deferred until packaged
+measurements exist.
+
+Application-level vault and configuration-backup encryption, safe backup
+retention, authenticated client-executable discovery, signed installers and
+updates, parser process isolation, access-history UI, and signed Claude Desktop
+Extension (`.dxt`) packaging remain release gates. Claude Desktop support is
+planned, not an implemented connection in this alpha. Use non-sensitive fixture
+data only. A cloud AI client can send retrieved excerpts to its configured model
+provider even though storage and retrieval run locally. Returned provenance
+metadata can also include titles, source paths, timestamps, and stable IDs.

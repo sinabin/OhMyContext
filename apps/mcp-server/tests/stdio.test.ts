@@ -86,17 +86,27 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
       const root = await mkdtemp(join(tmpdir(), "owncontext-mcp-"));
       temporaryRoots.push(root);
       const sourceDirectory = join(root, "source");
+      const deniedSourceDirectory = join(root, "denied-source");
       const vaultPath = join(root, "vault.sqlite3");
       const { importDirectory, openVault } = await import("@owncontext/core");
       await mkdir(sourceDirectory);
+      await mkdir(deniedSourceDirectory);
       await writeFile(
         join(sourceDirectory, "memory.md"),
         "# Protocol memory\n\nThe orchard meeting moved to Friday morning.",
         "utf8",
       );
+      await writeFile(
+        join(deniedSourceDirectory, "private.md"),
+        "# Outside the grant\n\nThe crosscollectioncanary must remain unavailable.",
+        "utf8",
+      );
 
       const vault = openVault(vaultPath);
       await importDirectory(vault, sourceDirectory);
+      await importDirectory(vault, deniedSourceDirectory, {
+        collection: "denied",
+      });
       vault.close();
 
       const transport = new StdioClientTransport({
@@ -107,6 +117,7 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
           ...getDefaultEnvironment(),
           NODE_NO_WARNINGS: "1",
           OWNCONTEXT_VAULT_PATH: vaultPath,
+          OWNCONTEXT_ALLOWED_COLLECTION: "default",
         },
         stderr: "pipe",
       });
@@ -134,7 +145,32 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
           }),
         );
         expect(search.isError).not.toBe(true);
+        expect(search.structuredContent).toMatchObject({
+          results: [{ contentTrust: "untrusted-user-data" }],
+        });
         const documentId = firstSearchDocumentId(search.structuredContent);
+
+        const deniedCanary = requireCompletedToolResult(
+          await client.callTool({
+            name: "search",
+            arguments: { query: "crosscollectioncanary" },
+          }),
+        );
+        expect(deniedCanary.isError).not.toBe(true);
+        expect(deniedCanary.structuredContent).toEqual({ results: [], count: 0 });
+        expect(JSON.stringify(deniedCanary)).not.toContain("Outside the grant");
+
+        const scopeEscape = requireCompletedToolResult(
+          await client.callTool({
+            name: "search",
+            arguments: {
+              query: "crosscollectioncanary",
+              collection: "denied",
+            },
+          }),
+        );
+        expect(scopeEscape.isError).toBe(true);
+        expect(JSON.stringify(scopeEscape)).not.toContain("crosscollectioncanary");
 
         const fetched = requireCompletedToolResult(
           await client.callTool({
@@ -147,6 +183,8 @@ describe.skipIf(!existsSync(CLI_PATH))("stdio protocol smoke test", () => {
           document: {
             documentId,
             content: expect.stringContaining("Friday morning"),
+            contentTrust: "untrusted-user-data",
+            chunks: [{ contentTrust: "untrusted-user-data" }],
           },
         });
         expect(stderr.join("")).not.toContain("startup failed");

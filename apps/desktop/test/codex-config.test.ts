@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  MAX_CODEX_CONFIG_BYTES,
   MAX_MANAGED_BLOCK_BYTES,
   OWNCONTEXT_MARKER_END,
   OWNCONTEXT_MARKER_START,
@@ -33,6 +34,7 @@ describe("Codex OwnContext MCP configuration service", () => {
       commandPath: join(testRoot, "runtime", "electron.exe"),
       args: [join(testRoot, "app", "mcp-server.mjs")],
       vaultPath: join(testRoot, "data", "vault.sqlite"),
+      allowedCollection: "default",
       runtime: "electron",
     };
   });
@@ -52,6 +54,7 @@ describe("Codex OwnContext MCP configuration service", () => {
       configExists: false,
     });
     expect(preview.snippet).toContain("OWNCONTEXT_VAULT_PATH");
+    expect(preview.snippet).toContain('OWNCONTEXT_ALLOWED_COLLECTION = "default"');
     expect(preview.snippet).toContain('ELECTRON_RUN_AS_NODE = "1"');
 
     const result = await service.apply(launch);
@@ -339,6 +342,27 @@ describe("Codex OwnContext MCP configuration service", () => {
     expect(await readFile(join(codexDirectory, result.backupFileName!), "utf8")).toBe(
       original,
     );
+  });
+
+  it("rejects an oversized concurrent replacement without reading it as a snapshot", async () => {
+    await mkdir(codexDirectory, { recursive: true });
+    await writeFile(configPath, 'model = "before"\n', "utf8");
+    const service = createCodexConfigService({
+      configPath,
+      beforeReplaceCheck: async () => {
+        await writeFile(configPath, Buffer.alloc(MAX_CODEX_CONFIG_BYTES + 1, 0x78));
+      },
+    });
+
+    const result = await service.apply(launch);
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "concurrent_change",
+      changed: false,
+      backupCreated: true,
+    });
+    expect((await readFile(configPath)).byteLength).toBe(MAX_CODEX_CONFIG_BYTES + 1);
   });
 
   it("rejects every relative supplied path and never creates a config", async () => {

@@ -58,6 +58,8 @@ Deliverables:
 - Focused `search` and `fetch` tools with structured outputs.
 - `readOnlyHint: true` and `openWorldHint: false` annotations.
 - No arbitrary path, URL, SQL, sync, or delete parameters.
+- One launch-time `OWNCONTEXT_ALLOWED_COLLECTION` grant (currently `default`
+  in desktop-managed launches), with requests for other collections denied.
 - Codex and Claude configuration examples plus a protocol smoke test.
 
 Acceptance:
@@ -65,18 +67,38 @@ Acceptance:
 - A real MCP client can initialize the server, list both tools, search fixture content, and fetch only an ID previously issued by the vault.
 - Protocol stdout contains JSON-RPC only; diagnostics use stderr.
 
+Boundary: returned rows and issued IDs are collection-scoped, but the current
+vault uses one global FTS table. Candidate work, cache/resource effects, and
+timing are not yet proven to be non-interfering across collections; that remains
+a Milestone 6 public-release gate.
+
 ## Milestone 3 — Consumer desktop alpha
 
-Status: in progress — the developer alpha and an unsigned Windows x64 Squirrel
-developer-preview installer are implemented. A clean-machine install/uninstall
-exercise, a signed public candidate, and a verified update channel remain
-outstanding.
+Status: in progress — the developer alpha, built-in sample onboarding,
+source-removal flow, reversible Codex configuration, user-scoped Claude Code
+configuration, and an unsigned Windows x64 Squirrel developer-preview installer
+are implemented. A clean-machine install/uninstall exercise, non-developer
+usability evidence, a signed public candidate, and a verified update channel
+remain outstanding.
 
 Deliverables:
 
 - Electron desktop shell with a replaceable core boundary.
-- Folder picker, import progress, source health, local search, and result provenance.
-- AI Connections screen that previews configuration changes and keeps backups.
+- Folder picker, import progress, source health, local search, source removal,
+  and result provenance.
+- Main-process-only built-in sample materialization with virtual
+  `owncontext-sample://library/v1/` provenance; the renderer supplies neither a
+  path nor a provenance override.
+- AI Connections screen that previews and reverses Codex and Claude Code
+  configuration changes without returning unrelated client configuration to the
+  renderer.
+- Claude Code user-scope setup that respects an absolute
+  `CLAUDE_CONFIG_DIR`; persistent override-target tracking across updater and
+  uninstaller environments remains release work. Claude Desktop Extension
+  support remains planned.
+- A fixed `default` collection grant in each managed MCP launch, with other
+  collection requests denied. Collection choice, expiry, and access-history UI
+  remain planned.
 - Privacy copy that distinguishes offline mode from cloud-AI excerpt transfer.
 - Two-step source removal with stale-confirmation protection and a persistent,
   content-free logical deletion receipt.
@@ -137,6 +159,18 @@ Deliverables:
   unresolved archive/extraction advisories; accept an upgrade only after the
   complete Windows make and smoke matrix passes.
 - Cross-vault leakage, prompt-injection impact, deletion, export, and log regression suites.
+- Collection-partitioned FTS candidate generation, or release evidence that
+  global-candidate work, caches, resource use, and timing do not create an
+  unacceptable cross-collection side channel.
+- Encryption, bounded retention, discovery, and deletion for complete Claude
+  configuration backups, which may contain unrelated secrets and currently can
+  accumulate beside the source file.
+- Windows DACL-preserving and external-race-safe AI configuration mutation,
+  including tested recovery and persisted custom-target revocation.
+- Authenticated client-launch discovery: supported-version checks plus verified
+  binary source, publisher/signature, and hash policy for Codex and Claude.
+- Signed Claude Desktop Extension (`.dxt`) packaging after its separate
+  connection flow is implemented.
 
 Acceptance:
 

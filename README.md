@@ -2,9 +2,9 @@
 
 OwnContext is a local-first personal context vault that turns user-controlled files and exports into cited, read-only context for MCP-compatible AI clients.
 
-The developer alpha now imports local text and Markdown files atomically, stores provenance in a local SQLite vault, searches the collection, exposes bounded `search` and `fetch` over a local MCP server, and provides a desktop flow for reversible Codex configuration.
+The developer alpha now imports local text and Markdown files atomically, stores provenance in a local SQLite vault, searches the collection, exposes bounded `search` and `fetch` over a local MCP server, includes a non-sensitive built-in sample library, and provides desktop flows for reversible Codex and Claude Code configuration.
 
-It is not a public consumer release. Application-level encryption, signed packaging and updates, parser isolation, and license selection remain release gates. Use non-sensitive fixture data only.
+It is not a public consumer release. Application-level encryption, collection-isolation side-channel validation, AI-client executable provenance checks, safe configuration-backup retention, signed packaging and updates, parser isolation, and license selection remain release gates. Use non-sensitive fixture data only.
 
 ## Product principles
 
@@ -13,8 +13,9 @@ It is not a public consumer release. Application-level encryption, signed packag
 - Retrieved content is untrusted data and never grants permissions.
 - MCP access is read-only in the MVP.
 - Local storage does not imply that excerpts stay local when a cloud AI client requests them.
-- Portable export and user-facing revocation and deletion workflows remain
-  planned; the current alpha does not claim them as complete.
+- Source removal and AI-client disconnect have developer-alpha flows. Portable
+  export and complete revocation/deletion coverage across every asset class
+  remain planned; the current alpha does not claim them as complete.
 
 ## Repository layout
 
@@ -46,8 +47,10 @@ npm start --workspace @owncontext/desktop
 The first development Electron invocation downloads its platform binary. An
 unsigned Windows x64 developer-preview installer is now produced with
 `npm run make --workspace @owncontext/desktop`; its users do not need Node.js.
-This is not a signed or publicly releasable package, and no public-release claim
-is made while the security and licensing gates remain open.
+The preview has no payment or license-key gate and is suitable only for private,
+non-sensitive local evaluation. This is not a signed or publicly releasable
+package, and no public-release claim is made while the security and licensing
+gates remain open.
 
 ## Implementation status
 
@@ -56,8 +59,37 @@ is made while the security and licensing gates remain open.
 | Product, connector, platform, and security contracts | Complete baseline |
 | Atomic local SQLite/FTS vault | Implemented and prototype-tested |
 | Read-only local stdio MCP | Implemented and real-protocol tested |
-| Desktop import, search, source health, and Codex config | Developer alpha |
+| Desktop import, sample onboarding, search, source removal, and Codex/Claude Code config | Developer alpha |
 | Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
+
+Each desktop-managed MCP launch is currently pinned to the single `default`
+collection. Requests for another collection are rejected, and `fetch` accepts
+only IDs issued by `search` on the same connection. This is a default-deny
+boundary outside that launch-time grant, not the planned collection picker,
+grant expiry, or access-history UI. The current vault still uses one global FTS
+index, so candidate work, cache effects, and response timing are not yet proven
+to be isolated between collections; public release remains blocked on that
+boundary.
+
+Claude Code connection is user-scoped and respects an absolute
+`CLAUDE_CONFIG_DIR`. OwnContext previews only a path-redacted generated MCP
+structure and status,
+not unrelated Claude settings. Before a mutation, however, the current alpha
+backs up the complete Claude configuration file beside the original. Those
+backups can contain unrelated secrets and can accumulate, so encryption,
+retention, and deletion behavior are public-release gates. Claude Desktop
+Extension (`.dxt`) distribution remains planned.
+
+The Claude connection postcondition preserves all existing top-level values,
+permits only bounded non-executable bootstrap metadata observed from the locally
+tested CLI, and rejects extra MCP grants or destructive rewrites. Codex and Claude
+configuration snapshots are read with a fixed bound even if another process
+replaces the file with an oversized one.
+
+The alpha also does not yet prove Windows DACL preservation or OS-level
+compare-and-swap safety for Claude configuration replacement, and it does not
+persist shell-local `CLAUDE_CONFIG_DIR` targets across updater environments. Use
+only non-sensitive fixtures until those release gates are closed.
 
 ## Platform and hardware status
 

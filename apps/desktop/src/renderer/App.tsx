@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type {
+  ClaudeCodeConnectionMutation,
+  ClaudeCodeConnectionPreview,
   CodexConnectionMutation,
   CodexConnectionPreview,
   DeletionReceiptView,
@@ -9,6 +11,7 @@ import type {
   SourcePurgePreview,
   VaultSource,
 } from "../electron/preload.cjs";
+import { deriveLibraryOnboarding } from "./onboarding.js";
 
 interface Result {
   documentId: string;
@@ -39,13 +42,13 @@ function summarizeImport(value: unknown): string {
   return parts.length > 0 ? parts.join(" · ") : "Import completed.";
 }
 
-function connectionStatus(preview: CodexConnectionPreview | undefined): string {
+function codexConnectionStatus(preview: CodexConnectionPreview | undefined): string {
   if (!preview) return "Checking local configuration…";
   if (!preview.serverReady) return "Local MCP build is unavailable";
 
   switch (preview.status) {
     case "managed":
-      return "Connected by OwnContext";
+      return "Configuration saved by OwnContext";
     case "absent":
       return "Ready to connect";
     case "unmanaged_conflict":
@@ -61,7 +64,7 @@ function connectionStatus(preview: CodexConnectionPreview | undefined): string {
   }
 }
 
-function mutationNotice(result: CodexConnectionMutation): string {
+function codexMutationNotice(result: CodexConnectionMutation): string {
   if (result.ok) {
     if (result.code === "unchanged") return "No configuration change was needed.";
     const backup = result.backupFileName
@@ -80,11 +83,94 @@ function mutationNotice(result: CodexConnectionMutation): string {
     invalid_encoding: "The configuration must be valid UTF-8 before OwnContext can edit it.",
     read_failed: "The configuration could not be read safely.",
     backup_failed: "No change was made because a backup could not be created.",
+    busy: "Another Claude Code configuration change is already in progress.",
     write_failed: "The configuration could not be replaced safely.",
     concurrent_change: "The Codex file changed during editing, so OwnContext left it untouched.",
     invalid_path: "The generated local launch paths did not pass validation.",
   };
   return messages[result.code] ?? "The connection was not changed.";
+}
+
+function claudeCodeConnectionStatus(
+  preview: ClaudeCodeConnectionPreview | undefined,
+): string {
+  if (!preview) return "Checking local configuration…";
+
+  switch (preview.status) {
+    case "managed":
+      return preview.serverReady
+        ? "User-scope configuration saved by OwnContext"
+        : "Saved configuration points to an unavailable local MCP build";
+    case "managed_stale":
+      return "OwnContext update required for this Claude Code connection";
+    case "absent":
+      if (!preview.serverReady) return "Local MCP build is unavailable";
+      return preview.cliAvailable
+        ? "Ready to register with Claude Code"
+        : "Claude Code CLI was not found";
+    case "unmanaged_conflict":
+      return "Existing OwnContext entry needs manual review";
+    case "config_too_large":
+      return "Claude configuration exceeds the safe edit limit";
+    case "invalid_encoding":
+      return "Claude configuration is not valid UTF-8";
+    case "invalid_json":
+      return "Claude configuration contains invalid JSON";
+    case "invalid_structure":
+      return "Claude configuration has an unsupported structure";
+    case "read_failed":
+      return "Claude configuration could not be read safely";
+    case "invalid_config_target":
+      return "CLAUDE_CONFIG_DIR is not a safe absolute directory";
+    case "invalid_launch":
+      return "Generated local launch details are invalid";
+  }
+}
+
+function claudeCodeMutationNotice(result: ClaudeCodeConnectionMutation): string {
+  const backup = result.backupFileName
+    ? ` Backup created: ${result.backupFileName}.`
+    : "";
+  if (result.ok) {
+    if (result.code === "unchanged") return "No Claude Code configuration change was needed.";
+    return result.code === "removed"
+      ? `OwnContext was removed from Claude Code.${backup}`
+      : `Claude Code registration saved.${backup} Restart active Claude Code sessions to load it.`;
+  }
+
+  if (result.code === "update_removed_retry_required") {
+    return `The outdated connection was removed safely, but the new registration failed.${backup} Retry Connect Claude Code.`;
+  }
+
+  if (result.restored) {
+    return `Claude Code did not keep the requested change, so OwnContext restored the prior configuration.${backup}`;
+  }
+
+  if (result.changed) {
+    return `Claude Code changed its configuration but verification failed.${backup} Review or restore the backup before relying on this connection.`;
+  }
+
+  const messages: Record<string, string> = {
+    server_unavailable: "Build the local MCP server before connecting Claude Code.",
+    cli_unavailable: "Install Claude Code and make its CLI available before connecting.",
+    unmanaged_conflict: "OwnContext found an unmanaged entry and refused to overwrite it.",
+    config_too_large: "The Claude configuration is larger than OwnContext's safe edit limit.",
+    invalid_encoding: "The Claude configuration must be valid UTF-8.",
+    invalid_json: "Repair the Claude JSON configuration before OwnContext can edit it.",
+    invalid_structure: "The Claude configuration structure is ambiguous, so OwnContext left it unchanged.",
+    read_failed: "The Claude configuration could not be read safely.",
+    invalid_config_target: "Use an absolute CLAUDE_CONFIG_DIR, then restart OwnContext.",
+    backup_failed: "No change was made because a backup could not be created.",
+    concurrent_change: "The Claude configuration changed during setup, so OwnContext stopped.",
+    cli_failed: "The Claude Code CLI rejected the registration command.",
+    cli_timeout: "The Claude Code CLI did not finish within the safe time limit.",
+    cli_output_limit: "The Claude Code CLI exceeded the safe output limit.",
+    verification_failed: "Claude Code did not save the exact scoped connection.",
+    recovery_required: "Claude Code changed its configuration unexpectedly. Review the backup before retrying.",
+    write_failed: "OwnContext could not replace the Claude configuration safely.",
+    invalid_launch: "The generated local launch paths did not pass validation.",
+  };
+  return messages[result.code] ?? "The Claude Code connection was not changed.";
 }
 
 function progressText(progress: ImportProgress | undefined): string {
@@ -114,6 +200,7 @@ export function App() {
   const [notice, setNotice] = useState("No source imported in this session.");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [sources, setSources] = useState<VaultSource[]>([]);
   const [receipts, setReceipts] = useState<DeletionReceiptView[]>([]);
   const [activity, setActivity] = useState<Activity>();
@@ -121,10 +208,16 @@ export function App() {
   const [selected, setSelected] = useState<FetchResponse>();
   const [purgePreview, setPurgePreview] = useState<SourcePurgePreview>();
   const [error, setError] = useState<string>();
-  const [connection, setConnection] = useState<CodexConnectionPreview>();
-  const [connectionBusy, setConnectionBusy] = useState(false);
-  const [connectionNotice, setConnectionNotice] = useState(
+  const [codexConnection, setCodexConnection] = useState<CodexConnectionPreview>();
+  const [codexConnectionBusy, setCodexConnectionBusy] = useState(false);
+  const [codexConnectionNotice, setCodexConnectionNotice] = useState(
     "OwnContext never returns the rest of your Codex configuration to this screen.",
+  );
+  const [claudeCodeConnection, setClaudeCodeConnection] =
+    useState<ClaudeCodeConnectionPreview>();
+  const [claudeCodeConnectionBusy, setClaudeCodeConnectionBusy] = useState(false);
+  const [claudeCodeConnectionNotice, setClaudeCodeConnectionNotice] = useState(
+    "OwnContext shows only the proposed OwnContext entry, never the rest of your Claude configuration.",
   );
 
   async function refreshSources() {
@@ -137,9 +230,14 @@ export function App() {
     setReceipts(response.receipts);
   }
 
-  async function refreshConnection() {
+  async function refreshCodexConnection() {
     const response = await window.ownContext.previewCodexConnection();
-    setConnection(response);
+    setCodexConnection(response);
+  }
+
+  async function refreshClaudeCodeConnection() {
+    const response = await window.ownContext.previewClaudeCodeConnection();
+    setClaudeCodeConnection(response);
   }
 
   useEffect(() => {
@@ -148,13 +246,19 @@ export function App() {
       window.ownContext.getStatus().then((value) => setStatus(value.mode)),
       refreshSources(),
       refreshReceipts(),
+      refreshCodexConnection(),
+      refreshClaudeCodeConnection(),
     ]).catch((reason: unknown) => setError(String(reason)));
     return stopListening;
   }, []);
 
   useEffect(() => {
     if (view === "connections") {
-      void refreshConnection().catch((reason: unknown) => setError(String(reason)));
+      void Promise.all([
+        refreshCodexConnection(),
+        // Preview only. Merely opening the screen must not execute a PATH command.
+        refreshClaudeCodeConnection(),
+      ]).catch((reason: unknown) => setError(String(reason)));
     }
   }, [view]);
 
@@ -169,6 +273,32 @@ export function App() {
         setNotice("Import canceled. The previous complete vault state was preserved.");
       } else if (!response.canceled) {
         setNotice(summarizeImport(response.result));
+        setHasSearched(false);
+        setResults([]);
+        await Promise.all([refreshSources(), refreshReceipts()]);
+      }
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setActivity(undefined);
+      setProgress(undefined);
+    }
+  }
+
+  async function handleImportSample() {
+    setActivity("import");
+    setProgress(undefined);
+    setError(undefined);
+
+    try {
+      const response = await window.ownContext.importSampleLibrary();
+      if (response.aborted) {
+        setNotice("Sample import canceled. The previous complete vault state was preserved.");
+      } else if (!response.canceled) {
+        setNotice(`${summarizeImport(response.result)} Try the suggested search.`);
+        setQuery(response.suggestedQuery ?? "weekly review");
+        setHasSearched(false);
+        setResults([]);
         await Promise.all([refreshSources(), refreshReceipts()]);
       }
     } catch (reason) {
@@ -195,6 +325,7 @@ export function App() {
     try {
       const response = await window.ownContext.search(query.trim());
       setResults(response.results as Result[]);
+      setHasSearched(true);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -242,6 +373,7 @@ export function App() {
       });
       if (response.status === "purged") {
         setResults([]);
+        setHasSearched(false);
         setSelected(undefined);
         setPurgePreview(undefined);
         setNotice(
@@ -270,19 +402,35 @@ export function App() {
     }
   }
 
-  async function mutateConnection(operation: "apply" | "remove") {
-    setConnectionBusy(true);
+  async function mutateCodexConnection(operation: "apply" | "remove") {
+    setCodexConnectionBusy(true);
     setError(undefined);
     try {
       const result = operation === "apply"
         ? await window.ownContext.applyCodexConnection()
         : await window.ownContext.removeCodexConnection();
-      setConnectionNotice(mutationNotice(result));
-      await refreshConnection();
+      setCodexConnectionNotice(codexMutationNotice(result));
+      await refreshCodexConnection();
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setConnectionBusy(false);
+      setCodexConnectionBusy(false);
+    }
+  }
+
+  async function mutateClaudeCodeConnection(operation: "apply" | "remove") {
+    setClaudeCodeConnectionBusy(true);
+    setError(undefined);
+    try {
+      const result = operation === "apply"
+        ? await window.ownContext.applyClaudeCodeConnection()
+        : await window.ownContext.removeClaudeCodeConnection();
+      setClaudeCodeConnectionNotice(claudeCodeMutationNotice(result));
+      await refreshClaudeCodeConnection();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setClaudeCodeConnectionBusy(false);
     }
   }
 
@@ -358,11 +506,11 @@ export function App() {
 
         <section className="boundary" aria-label="Current data boundary">
           <span>{view === "library" ? "Current mode" : "Transfer boundary"}</span>
-          <strong>{view === "library" ? status : "Local retrieval · selected excerpts may leave"}</strong>
+          <strong>{view === "library" ? status : "Local retrieval · returned context may leave"}</strong>
           <p>
             {view === "library"
-              ? "Files and the index stay on this device. Excerpts can leave it when an authorized cloud AI requests context."
-              : "Codex receives only bounded search results. Its configured model provider may process those excerpts outside this device."}
+              ? "Files and the index stay on this device. Returned text and provenance metadata can leave it when an authorized cloud AI requests context."
+              : "An enabled AI client receives bounded text and provenance metadata from its allowed collection. Its configured model provider may process them outside this device."}
           </p>
         </section>
 
@@ -377,6 +525,9 @@ export function App() {
             receipts={receipts}
             selected={selected}
             sources={sources}
+            hasSearched={hasSearched}
+            codexStatus={codexConnection?.status}
+            claudeCodeStatus={claudeCodeConnection?.status}
             purgePreview={purgePreview}
             onFetch={handleFetch}
             onBeginSourcePurge={beginSourcePurge}
@@ -384,15 +535,23 @@ export function App() {
             onConfirmSourcePurge={confirmSourcePurge}
             onQueryChange={setQuery}
             onSearch={handleSearch}
+            onImportFolder={handleImport}
+            onImportSample={handleImportSample}
+            onOpenConnections={() => setView("connections")}
             onCloseSelected={() => setSelected(undefined)}
           />
         ) : (
           <ConnectionsView
-            busy={connectionBusy}
-            notice={connectionNotice}
-            preview={connection}
-            onApply={() => mutateConnection("apply")}
-            onRemove={() => mutateConnection("remove")}
+            codexBusy={codexConnectionBusy}
+            codexNotice={codexConnectionNotice}
+            codexPreview={codexConnection}
+            claudeCodeBusy={claudeCodeConnectionBusy}
+            claudeCodeNotice={claudeCodeConnectionNotice}
+            claudeCodePreview={claudeCodeConnection}
+            onApplyCodex={() => mutateCodexConnection("apply")}
+            onRemoveCodex={() => mutateCodexConnection("remove")}
+            onApplyClaudeCode={() => mutateClaudeCodeConnection("apply")}
+            onRemoveClaudeCode={() => mutateClaudeCodeConnection("remove")}
           />
         )}
       </main>
@@ -408,6 +567,9 @@ interface LibraryViewProps {
   receipts: DeletionReceiptView[];
   selected: FetchResponse | undefined;
   sources: VaultSource[];
+  hasSearched: boolean;
+  codexStatus: CodexConnectionPreview["status"] | undefined;
+  claudeCodeStatus: ClaudeCodeConnectionPreview["status"] | undefined;
   purgePreview: SourcePurgePreview | undefined;
   onFetch: (result: Result) => void;
   onBeginSourcePurge: (source: VaultSource) => void;
@@ -415,10 +577,25 @@ interface LibraryViewProps {
   onConfirmSourcePurge: () => void;
   onQueryChange: (value: string) => void;
   onSearch: (event: FormEvent) => void;
+  onImportFolder: () => void;
+  onImportSample: () => void;
+  onOpenConnections: () => void;
   onCloseSelected: () => void;
 }
 
 function LibraryView(props: LibraryViewProps) {
+  const documentCount = props.sources.reduce(
+    (total, source) => total + source.documentCount,
+    0,
+  );
+  const onboarding = deriveLibraryOnboarding({
+    documentCount,
+    resultCount: props.results.length,
+    hasSearched: props.hasSearched,
+    hasManagedConnection:
+      props.codexStatus === "managed" || props.claudeCodeStatus === "managed",
+  });
+
   return (
     <section className="workspace">
       <div className="section-heading">
@@ -441,13 +618,74 @@ function LibraryView(props: LibraryViewProps) {
         </button>
       </form>
 
+      {onboarding.canContinueToConnections ? (
+        <section className="setup-bridge" aria-label="Finish AI setup">
+          <div>
+            <p className="eyebrow">NEXT STEP · AI ACCESS</p>
+            <h3>
+              {onboarding.aiConfigurationSaved
+                ? "An AI connection configuration is saved."
+                : "Your library is ready for an AI client."}
+            </h3>
+            <p>
+              {onboarding.aiConfigurationSaved
+                ? "Review the allowed collection or disconnect a client. Restart that client after a configuration change."
+                : "Preview the generated MCP structure, permission boundary, and external-transfer notice before anything is changed."}
+            </p>
+          </div>
+          <button className="secondary" type="button" onClick={props.onOpenConnections}>
+            {onboarding.aiConfigurationSaved
+              ? "Review AI connections"
+              : "Continue to AI connections"}
+          </button>
+        </section>
+      ) : null}
+
       <div className="content-grid">
         <div className="results" aria-live="polite">
           {props.results.length === 0 ? (
             <div className="empty">
-              <span>01</span>
-              <h3>Add a folder, then search</h3>
-              <p>Markdown and text files are supported by this first vertical slice.</p>
+              {onboarding.emptyState === "first-run" ? (
+                <>
+                  <span>SAFE FIRST RUN</span>
+                  <h3>Try OwnContext without using your files</h3>
+                  <p>
+                    Add a small built-in library of fictional English and Korean notes, or choose
+                    a folder you are authorized to import. Only UTF-8 Markdown and text files are read.
+                  </p>
+                  <div className="empty-actions">
+                    <button
+                      className="primary"
+                      type="button"
+                      disabled={props.activity !== undefined}
+                      onClick={props.onImportSample}
+                    >
+                      Try sample library
+                    </button>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={props.activity !== undefined}
+                      onClick={props.onImportFolder}
+                    >
+                      Choose my folder
+                    </button>
+                  </div>
+                  <small>The sample is non-sensitive, removable, and stored only in this local profile.</small>
+                </>
+              ) : onboarding.emptyState === "no-results" ? (
+                <>
+                  <span>NO MATCHES</span>
+                  <h3>No result matched this search</h3>
+                  <p>Try fewer words or a phrase that appears in one of the imported documents.</p>
+                </>
+              ) : (
+                <>
+                  <span>SEARCH READY</span>
+                  <h3>Search your imported library</h3>
+                  <p>Use the suggested query or words you remember from a Markdown or text file.</p>
+                </>
+              )}
             </div>
           ) : (
             props.results.map((result) => (
@@ -594,31 +832,38 @@ function LibraryView(props: LibraryViewProps) {
 }
 
 interface ConnectionsViewProps {
-  busy: boolean;
-  notice: string;
-  preview: CodexConnectionPreview | undefined;
-  onApply: () => void;
-  onRemove: () => void;
+  codexBusy: boolean;
+  codexNotice: string;
+  codexPreview: CodexConnectionPreview | undefined;
+  claudeCodeBusy: boolean;
+  claudeCodeNotice: string;
+  claudeCodePreview: ClaudeCodeConnectionPreview | undefined;
+  onApplyCodex: () => void;
+  onRemoveCodex: () => void;
+  onApplyClaudeCode: () => void;
+  onRemoveClaudeCode: () => void;
 }
 
 function ConnectionsView(props: ConnectionsViewProps) {
-  const managed = props.preview?.status === "managed";
+  const codexManaged = props.codexPreview?.status === "managed";
+  const claudeCodeManaged = props.claudeCodePreview?.status === "managed";
+  const claudeCodeRegistered =
+    claudeCodeManaged || props.claudeCodePreview?.status === "managed_stale";
   return (
     <section className="workspace connections">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">FIRST SUPPORTED CLIENT</p>
-          <h2>Codex desktop and CLI</h2>
+          <p className="eyebrow">SUPPORTED AI CLIENTS</p>
+          <h2>Choose where your local context may be used.</h2>
         </div>
-        <span className="session-notice">{props.notice}</span>
       </div>
 
-      <article className="connection-card">
+      <article className="connection-card" aria-label="Codex connection">
         <div className="connection-summary">
           <div className="client-icon">CX</div>
           <div>
-            <span className={`health ${managed ? "ready" : "incomplete"}`} />
-            <strong>{connectionStatus(props.preview)}</strong>
+            <span className={`health ${codexManaged ? "ready" : "incomplete"}`} />
+            <strong>{codexConnectionStatus(props.codexPreview)}</strong>
             <p>
               OwnContext manages one marked block in <code>~/.codex/config.toml</code>.
               Existing settings stay private and are preserved byte-for-byte.
@@ -628,17 +873,20 @@ function ConnectionsView(props: ConnectionsViewProps) {
 
         <div className="permission-grid">
           <div><span>Tools</span><strong>search · fetch</strong></div>
-          <div><span>Document writes</span><strong>None · audit log only</strong></div>
-          <div><span>Network listener</span><strong>None · stdio</strong></div>
-          <div><span>Audit</span><strong>Query hash · document IDs</strong></div>
+          <div>
+            <span>Allowed collection</span>
+            <strong>{props.codexPreview?.allowedCollection ?? "Checking…"}</strong>
+          </div>
+          <div><span>Grant duration</span><strong>Until disconnected</strong></div>
+          <div><span>Writes / transport</span><strong>No document writes · stdio</strong></div>
         </div>
 
         <div className="config-preview">
           <div>
             <p className="eyebrow">CHANGE PREVIEW</p>
-            <p>Only this generated block is shown. The current Codex file is never sent to the renderer.</p>
+            <p>The generated structure is shown with private local paths redacted. The current Codex file is never sent to the renderer.</p>
           </div>
-          <pre>{props.preview?.snippet || "A safe preview is unavailable until the conflict is resolved."}</pre>
+          <pre>{props.codexPreview?.snippet || "A safe preview is unavailable until the conflict is resolved."}</pre>
         </div>
 
         <div className="connection-warning">
@@ -646,8 +894,9 @@ function ConnectionsView(props: ConnectionsViewProps) {
           <p>
             Installing OwnContext does not connect Codex. Updates refresh the connection only
             while this marked block is already managed. A timestamped backup is created before an
-            existing file changes. Restart Codex after applying or updating. Cloud models may
-            receive excerpts selected through these tools.
+            existing file changes. Restart Codex after applying or updating. The AI client or
+            provider may receive returned excerpts and provenance metadata, including titles,
+            source paths, timestamps, and stable document IDs.
           </p>
         </div>
 
@@ -655,20 +904,88 @@ function ConnectionsView(props: ConnectionsViewProps) {
           <button
             className="primary"
             type="button"
-            disabled={props.busy || !props.preview?.canApply}
-            onClick={props.onApply}
+            disabled={props.codexBusy || !props.codexPreview?.canApply}
+            onClick={props.onApplyCodex}
           >
-            {props.busy ? "Working…" : managed ? "Update connection" : "Connect Codex"}
+            {props.codexBusy ? "Working…" : codexManaged ? "Update connection" : "Connect Codex"}
           </button>
           <button
             className="secondary danger-text"
             type="button"
-            disabled={props.busy || !props.preview?.canRemove}
-            onClick={props.onRemove}
+            disabled={props.codexBusy || !props.codexPreview?.canRemove}
+            onClick={props.onRemoveCodex}
           >
             Disconnect OwnContext
           </button>
         </div>
+        <p className="connection-notice" aria-live="polite">{props.codexNotice}</p>
+      </article>
+
+      <article className="connection-card" aria-label="Claude Code connection">
+        <div className="connection-summary">
+          <div className="client-icon claude">CC</div>
+          <div>
+            <span className={`health ${claudeCodeManaged ? "ready" : "incomplete"}`} />
+            <strong>{claudeCodeConnectionStatus(props.claudeCodePreview)}</strong>
+            <p>
+              OwnContext asks the installed Claude Code CLI to manage the user-scoped
+              <code> owncontext</code> entry. It respects <code>CLAUDE_CONFIG_DIR</code> without
+              showing that private path or unrelated Claude settings on this screen.
+            </p>
+          </div>
+        </div>
+
+        <div className="permission-grid">
+          <div><span>Tools</span><strong>search · fetch</strong></div>
+          <div>
+            <span>Allowed collection</span>
+            <strong>{props.claudeCodePreview?.allowedCollection ?? "Checking…"}</strong>
+          </div>
+          <div><span>Grant duration</span><strong>Until disconnected</strong></div>
+          <div><span>Writes / transport</span><strong>No document writes · stdio</strong></div>
+        </div>
+
+        <div className="config-preview">
+          <div>
+            <p className="eyebrow">CHANGE PREVIEW</p>
+            <p>OwnContext's generated JSON structure is shown with private local paths redacted. Registration uses separated CLI arguments, never a shell command string.</p>
+          </div>
+          <pre>{props.claudeCodePreview?.snippet || "A safe preview is unavailable until Claude Code is found or the conflict is resolved."}</pre>
+        </div>
+
+        <div className="connection-warning">
+          <strong>Before registering</strong>
+          <p>
+            Clicking connect runs Claude Code's user-scope MCP command after creating a backup
+            when a configuration already exists. Restart active Claude Code sessions after a
+            change. The AI client or provider may receive returned excerpts and provenance
+            metadata, including titles, source paths, timestamps, and stable document IDs.
+          </p>
+        </div>
+
+        <div className="connection-actions">
+          <button
+            className="primary"
+            type="button"
+            disabled={props.claudeCodeBusy || !props.claudeCodePreview?.canApply}
+            onClick={props.onApplyClaudeCode}
+          >
+            {props.claudeCodeBusy
+              ? "Working…"
+              : claudeCodeRegistered
+                ? "Refresh registration"
+                : "Connect Claude Code"}
+          </button>
+          <button
+            className="secondary danger-text"
+            type="button"
+            disabled={props.claudeCodeBusy || !props.claudeCodePreview?.canRemove}
+            onClick={props.onRemoveClaudeCode}
+          >
+            Disconnect OwnContext
+          </button>
+        </div>
+        <p className="connection-notice" aria-live="polite">{props.claudeCodeNotice}</p>
       </article>
 
       <div className="planned-client">

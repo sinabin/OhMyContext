@@ -261,11 +261,18 @@ async function runGuiSmoke(executable, temporaryRoot) {
     await readFile(resolve(temporaryRoot, "renderer-ready.json"), "utf8"),
   );
   if (
-    result.status !== "renderer-loaded" ||
+    result.status !== "first-run-sample-search-complete" ||
     result.nonce !== nonce ||
-    result.isPackaged !== true
+    result.isPackaged !== true ||
+    result.sampleSourceReady !== true ||
+    result.sampleSourceLabel !== "OwnContext Sample Library" ||
+    result.suggestedQuery !== "weekly review" ||
+    result.sampleProvenanceVerified !== true ||
+    !Number.isInteger(result.resultCardCount) ||
+    result.resultCardCount < 1 ||
+    result.resultCardCount > 12
   ) {
-    throw new Error("Packaged GUI renderer readiness evidence is invalid.");
+    throw new Error("Packaged GUI first-run journey evidence is invalid.");
   }
 }
 
@@ -389,6 +396,7 @@ try {
       ...getDefaultEnvironment(),
       ELECTRON_RUN_AS_NODE: "1",
       NODE_NO_WARNINGS: "1",
+      OWNCONTEXT_ALLOWED_COLLECTION: "packaged-smoke",
       OWNCONTEXT_VAULT_PATH: vaultPath,
     },
     stderr: "pipe",

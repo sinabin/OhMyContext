@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 
 const VAULT_ENVIRONMENT_VARIABLE = "OWNCONTEXT_VAULT_PATH";
+const ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE = "OWNCONTEXT_ALLOWED_COLLECTION";
 
 type SupportedPlatform = NodeJS.Platform;
 
@@ -9,6 +10,10 @@ export type VaultPathOptions = {
   env?: Readonly<Record<string, string | undefined>>;
   homeDirectory?: string;
   platform?: SupportedPlatform;
+};
+
+export type AllowedCollectionOptions = {
+  env?: Readonly<Record<string, string | undefined>>;
 };
 
 function platformPath(platform: SupportedPlatform): typeof posix | typeof win32 {
@@ -81,4 +86,34 @@ export function resolveVaultPath(options: VaultPathOptions = {}): string {
   return posix.join(dataRoot, "owncontext", "vault.sqlite3");
 }
 
-export { VAULT_ENVIRONMENT_VARIABLE };
+/**
+ * Resolves the single collection this MCP process is allowed to expose.
+ *
+ * The value is fixed when the process starts. Tool callers may narrow a search
+ * to the same collection, but cannot select a different collection at runtime.
+ */
+export function resolveAllowedCollection(
+  options: AllowedCollectionOptions = {},
+): string {
+  const env = options.env ?? process.env;
+  const configured = env[ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE];
+  const collection = configured?.trim().normalize("NFC");
+
+  if (!collection || collection.length > 128) {
+    throw new Error(
+      `${ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE} must contain 1 to 128 characters.`,
+    );
+  }
+  if (/\p{Cc}/u.test(collection)) {
+    throw new Error(
+      `${ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE} must not contain control characters.`,
+    );
+  }
+
+  return collection;
+}
+
+export {
+  ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE,
+  VAULT_ENVIRONMENT_VARIABLE,
+};

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE,
   VAULT_ENVIRONMENT_VARIABLE,
+  resolveAllowedCollection,
   resolveVaultPath,
 } from "../src/config.js";
 
@@ -66,4 +68,27 @@ describe("resolveVaultPath", () => {
       }),
     ).toBe("/home/ada/.local/share/owncontext/vault.sqlite3");
   });
+});
+
+describe("resolveAllowedCollection", () => {
+  it("fails closed when a connection has no explicit collection grant", () => {
+    expect(() => resolveAllowedCollection({ env: {} })).toThrow(
+      ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE,
+    );
+  });
+
+  it("accepts one bounded launch-time collection grant", () => {
+    expect(resolveAllowedCollection({
+      env: { [ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE]: " writing " },
+    })).toBe("writing");
+  });
+
+  it.each(["", "   ", "private\ncollection", "x".repeat(129)])(
+    "rejects an unsafe collection grant: %j",
+    (collection) => {
+      expect(() => resolveAllowedCollection({
+        env: { [ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE]: collection },
+      })).toThrow(ALLOWED_COLLECTION_ENVIRONMENT_VARIABLE);
+    },
+  );
 });

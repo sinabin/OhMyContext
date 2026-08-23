@@ -11,6 +11,7 @@ import {
 import {
   fetchDocument,
   importDirectory,
+  importOwnContextSampleLibrary,
   listDeletionReceipts,
   listSources,
   openVault,
@@ -18,6 +19,7 @@ import {
   purgeSource,
   searchVault,
   verifyDeletionReceipt,
+  type ImportProgress,
   type PurgeSourceInput,
   type Vault,
 } from "@owncontext/core";
@@ -26,9 +28,15 @@ import {
   type CodexConfigService,
   type OwnContextMcpLaunch,
 } from "./codex-config.js";
+import {
+  createClaudeCodeConfigService,
+  type ClaudeCodeConfigService,
+  type ClaudeCodeMcpLaunch,
+} from "./claude-code-config.js";
 import { isTrustedIpcSender } from "./ipc-trust.js";
 import {
   prepareGuiSmoke,
+  runGuiSmokeJourney,
   writeGuiSmokeSuccess,
   type GuiSmokeContext,
 } from "./gui-smoke.js";
@@ -36,6 +44,12 @@ import {
   beginSquirrelLifecycle,
   createSquirrelUpdateRunner,
 } from "./squirrel-lifecycle.js";
+import { materializeSampleLibrary } from "./sample-library.js";
+import {
+  omitConnectionMutationSnippet,
+  renderRendererSafeClaudeCodePreview,
+  renderRendererSafeCodexPreview,
+} from "./renderer-connection-preview.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 let vault: Vault | undefined;
@@ -88,13 +102,84 @@ function mcpEntryPath(): string {
     : join(app.getAppPath(), "..", "mcp-server", "dist", "cli.js");
 }
 
-function codexLaunch(): OwnContextMcpLaunch {
+function ownContextMcpLaunch(): OwnContextMcpLaunch & ClaudeCodeMcpLaunch {
   return {
     commandPath: process.execPath,
     args: [mcpEntryPath()],
     vaultPath: databasePath(),
+    allowedCollection: "default",
     runtime: "electron",
   };
+}
+
+interface VaultImportOptions {
+  collection?: string;
+  sourceName?: string;
+  exposeSelectedPath?: boolean;
+  sample?: boolean;
+  suggestedQuery?: string;
+  builtInSample?: true;
+}
+
+async function runVaultImport(
+  event: IpcMainInvokeEvent,
+  selectedPath: string,
+  options: VaultImportOptions = {},
+) {
+  if (activeImport) {
+    throw new Error("An import is already running.");
+  }
+
+  const controller = new AbortController();
+  activeImport = controller;
+  const publicMetadata = {
+    ...(options.exposeSelectedPath === false ? {} : { selectedPath }),
+    ...(options.sample === true ? { sample: true as const } : {}),
+    ...(options.suggestedQuery ? { suggestedQuery: options.suggestedQuery } : {}),
+  };
+
+  try {
+    const onProgress = (progress: ImportProgress): void => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("vault:import-progress", progress);
+      }
+    };
+    const result = options.builtInSample
+      ? await importOwnContextSampleLibrary(requireVault(), selectedPath, {
+          signal: controller.signal,
+          onProgress,
+        })
+      : await importDirectory(requireVault(), selectedPath, {
+          ...(options.collection ? { collection: options.collection } : {}),
+          ...(options.sourceName ? { sourceName: options.sourceName } : {}),
+          signal: controller.signal,
+          onProgress,
+        });
+    return {
+      canceled: false as const,
+      aborted: false as const,
+      ...publicMetadata,
+      result,
+    };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return {
+        canceled: false as const,
+        aborted: true as const,
+        ...publicMetadata,
+      };
+    }
+    throw error;
+  } finally {
+    activeImport = undefined;
+    if (quitAfterImport) {
+      quitAfterImport = false;
+      closeVault();
+      app.quit();
+    } else if (BrowserWindow.getAllWindows().length === 0) {
+      closeVault();
+    }
+  }
 }
 
 function armGuiSmoke(window: BrowserWindow, context: GuiSmokeContext): void {
@@ -105,29 +190,16 @@ function armGuiSmoke(window: BrowserWindow, context: GuiSmokeContext): void {
     clearTimeout(timeout);
     app.exit(2);
   };
-  const timeout = setTimeout(finishWithFailure, 20_000);
+  // Leave bounded headroom for a cold packaged renderer load before the
+  // journey's own 18-second execution deadline.
+  const timeout = setTimeout(finishWithFailure, 25_000);
 
   window.webContents.once("did-fail-load", finishWithFailure);
   window.webContents.once("did-finish-load", () => {
-    const waitForRenderer = async (): Promise<boolean> => {
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        const ready = await window.webContents.executeJavaScript(
-          "Boolean(document.querySelector('.shell') && window.ownContext && typeof window.ownContext.getStatus === 'function')",
-          true,
-        );
-        if (ready === true) return true;
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-      }
-      return false;
-    };
-
-    void waitForRenderer()
-      .then((rendererReady: unknown) => {
-        if (rendererReady !== true) {
-          finishWithFailure();
-          return;
-        }
-        writeGuiSmokeSuccess(context, app.isPackaged);
+    void runGuiSmokeJourney(window.webContents)
+      .then((evidence) => {
+        if (finished) return;
+        writeGuiSmokeSuccess(context, app.isPackaged, evidence);
         finished = true;
         clearTimeout(timeout);
         app.exit(0);
@@ -171,6 +243,7 @@ function createWindow(guiSmoke?: GuiSmokeContext): BrowserWindow {
 
 function startDesktopApp(
   codexConfig: CodexConfigService,
+  claudeCodeConfig: ClaudeCodeConfigService,
   guiSmoke?: GuiSmokeContext,
 ): void {
   void app.whenReady().then(() => {
@@ -178,7 +251,7 @@ function startDesktopApp(
       trustedWindowFor(event);
       return {
         ready: true,
-        mode: "Local vault + selected AI excerpts",
+        mode: "Local vault + bounded AI context and provenance",
         encryption: "not-implemented" as const,
       };
     });
@@ -199,33 +272,21 @@ function startDesktopApp(
         return { canceled: true, aborted: false };
       }
 
-      const controller = new AbortController();
-      activeImport = controller;
-      try {
-        const result = await importDirectory(requireVault(), selectedPath, {
-          signal: controller.signal,
-          onProgress: (progress) => {
-            if (!event.sender.isDestroyed()) {
-              event.sender.send("vault:import-progress", progress);
-            }
-          },
-        });
-        return { canceled: false, aborted: false, selectedPath, result };
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return { canceled: false, aborted: true, selectedPath };
-        }
-        throw error;
-      } finally {
-        activeImport = undefined;
-        if (quitAfterImport) {
-          quitAfterImport = false;
-          closeVault();
-          app.quit();
-        } else if (BrowserWindow.getAllWindows().length === 0) {
-          closeVault();
-        }
+      return runVaultImport(event, selectedPath);
+    });
+
+    ipcMain.handle("vault:import-sample-library", async (event) => {
+      trustedWindowFor(event);
+      if (activeImport) {
+        throw new Error("An import is already running.");
       }
+      const sample = await materializeSampleLibrary(app.getPath("userData"));
+      return runVaultImport(event, sample.directoryPath, {
+        exposeSelectedPath: false,
+        sample: true,
+        suggestedQuery: sample.suggestedQuery,
+        builtInSample: true,
+      });
     });
 
     ipcMain.handle("vault:cancel-import", (event) => {
@@ -302,9 +363,12 @@ function startDesktopApp(
     ipcMain.handle("connection:codex-preview", async (event) => {
       trustedWindowFor(event);
       const serverReady = existsSync(mcpEntryPath());
-      const preview = await codexConfig.preview(codexLaunch());
+      const launch = ownContextMcpLaunch();
+      const preview = await codexConfig.preview(launch);
       return {
         ...preview,
+        snippet: renderRendererSafeCodexPreview(launch),
+        allowedCollection: launch.allowedCollection,
         canApply: preview.canApply && serverReady,
         serverReady,
       };
@@ -320,12 +384,48 @@ function startDesktopApp(
           backupCreated: false,
         };
       }
-      return codexConfig.apply(codexLaunch());
+      return omitConnectionMutationSnippet(
+        await codexConfig.apply(ownContextMcpLaunch()),
+      );
     });
 
-    ipcMain.handle("connection:codex-remove", (event) => {
+    ipcMain.handle("connection:codex-remove", async (event) => {
       trustedWindowFor(event);
-      return codexConfig.remove();
+      return omitConnectionMutationSnippet(await codexConfig.remove());
+    });
+
+    ipcMain.handle("connection:claude-code-preview", async (event) => {
+      trustedWindowFor(event);
+      const serverReady = existsSync(mcpEntryPath());
+      const launch = ownContextMcpLaunch();
+      const preview = await claudeCodeConfig.preview(launch);
+      return {
+        ...preview,
+        snippet: renderRendererSafeClaudeCodePreview(launch),
+        allowedCollection: launch.allowedCollection,
+        canApply: preview.canApply && serverReady,
+        serverReady,
+      };
+    });
+
+    ipcMain.handle("connection:claude-code-apply", async (event) => {
+      trustedWindowFor(event);
+      if (!existsSync(mcpEntryPath())) {
+        return {
+          ok: false,
+          code: "server_unavailable",
+          changed: false,
+          backupCreated: false,
+        };
+      }
+      return omitConnectionMutationSnippet(
+        await claudeCodeConfig.apply(ownContextMcpLaunch()),
+      );
+    });
+
+    ipcMain.handle("connection:claude-code-remove", async (event) => {
+      trustedWindowFor(event);
+      return omitConnectionMutationSnippet(await claudeCodeConfig.remove());
     });
 
     createWindow(guiSmoke);
@@ -371,11 +471,12 @@ async function bootstrap(): Promise<void> {
     argv: process.argv,
     executablePath: process.execPath,
     createConfigService: () => createCodexConfigService(),
+    createClaudeCodeConfigService: () => createClaudeCodeConfigService(),
     createLaunch: () => {
       if (!existsSync(mcpEntryPath())) {
         throw new Error("Packaged MCP runtime is unavailable.");
       }
-      return codexLaunch();
+      return ownContextMcpLaunch();
     },
     runUpdate: createSquirrelUpdateRunner(process.execPath),
     quit: () => app.quit(),
@@ -408,7 +509,10 @@ async function bootstrap(): Promise<void> {
   const codexConfig = createCodexConfigService(
     guiSmoke ? { configPath: guiSmoke.codexConfigPath } : {},
   );
-  startDesktopApp(codexConfig, guiSmoke);
+  const claudeCodeConfig = createClaudeCodeConfigService(
+    guiSmoke ? { configPath: guiSmoke.claudeCodeConfigPath } : {},
+  );
+  startDesktopApp(codexConfig, claudeCodeConfig, guiSmoke);
 }
 
 try {

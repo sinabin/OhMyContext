@@ -54,7 +54,10 @@ type ConnectedServer = {
 };
 const connected: ConnectedServer[] = [];
 
-async function connectServer(overrides: Partial<VaultReadApi> = {}) {
+async function connectServer(
+  overrides: Partial<VaultReadApi> = {},
+  allowedCollection = "default",
+) {
   const api: VaultReadApi = {
     searchVault: vi.fn(() => [searchResult]),
     fetchDocument: vi.fn(() => fetchResult),
@@ -64,6 +67,7 @@ async function connectServer(overrides: Partial<VaultReadApi> = {}) {
   const diagnostics: string[] = [];
   const server = createOwnContextServer(vault, {
     api,
+    allowedCollection,
     writeDiagnostic: (message) => diagnostics.push(message),
   });
   const client = new Client({ name: "owncontext-test", version: "0.0.0" });
@@ -142,7 +146,7 @@ describe("OwnContext MCP server", () => {
   });
 
   it("returns search results as structured content and JSON text", async () => {
-    const { api, client, vault } = await connectServer();
+    const { api, client, vault } = await connectServer({}, "writing");
     const result = requireCompletedToolResult(
       await client.callTool({
         name: "search",
@@ -156,7 +160,7 @@ describe("OwnContext MCP server", () => {
 
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toEqual({
-      results: [searchResult],
+      results: [{ ...searchResult, contentTrust: "untrusted-user-data" }],
       count: 1,
     });
     expect(JSON.parse(requireTextContent(result.content[0]))).toEqual(
@@ -167,6 +171,43 @@ describe("OwnContext MCP server", () => {
       collection: "writing",
       limit: 5,
     });
+  });
+
+  it("forces omitted collection searches into the connection grant", async () => {
+    const { api, client, vault } = await connectServer({}, "private-notes");
+    const result = requireCompletedToolResult(
+      await client.callTool({
+        name: "search",
+        arguments: { query: "attributable" },
+      }),
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(api.searchVault).toHaveBeenCalledWith(vault, {
+      query: "attributable",
+      collection: "private-notes",
+    });
+  });
+
+  it("denies a different collection without calling or diagnosing the vault", async () => {
+    const searchVaultMock = vi.fn(() => [searchResult]);
+    const { client, diagnostics } = await connectServer(
+      { searchVault: searchVaultMock },
+      "private-alpha",
+    );
+    const result = requireCompletedToolResult(
+      await client.callTool({
+        name: "search",
+        arguments: { query: "attributable", collection: "other-beta" },
+      }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(requireTextContent(result.content[0])).toContain("outside this connection's allowed scope");
+    expect(requireTextContent(result.content[0])).not.toContain("private-alpha");
+    expect(requireTextContent(result.content[0])).not.toContain("other-beta");
+    expect(searchVaultMock).not.toHaveBeenCalled();
+    expect(diagnostics).toEqual([]);
   });
 
   it("fetches bounded context by vault-issued IDs", async () => {
@@ -189,7 +230,16 @@ describe("OwnContext MCP server", () => {
     );
 
     expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toEqual({ document: fetchResult });
+    expect(result.structuredContent).toEqual({
+      document: {
+        ...fetchResult,
+        contentTrust: "untrusted-user-data",
+        chunks: fetchResult.chunks.map((chunk) => ({
+          ...chunk,
+          contentTrust: "untrusted-user-data",
+        })),
+      },
+    });
     expect(JSON.parse(requireTextContent(result.content[0]))).toEqual(
       result.structuredContent,
     );

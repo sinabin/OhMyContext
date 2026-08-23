@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron") as typeof import("ele
 const api = {
   getStatus: () => ipcRenderer.invoke("vault:status") as Promise<VaultStatus>,
   importDirectory: () => ipcRenderer.invoke("vault:import-directory") as Promise<ImportResponse>,
+  importSampleLibrary: () =>
+    ipcRenderer.invoke("vault:import-sample-library") as Promise<ImportResponse>,
   cancelImport: () => ipcRenderer.invoke("vault:cancel-import") as Promise<CancelImportResponse>,
   onImportProgress: (listener: (progress: ImportProgress) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, progress: ImportProgress) => {
@@ -29,6 +31,12 @@ const api = {
     ipcRenderer.invoke("connection:codex-apply") as Promise<CodexConnectionMutation>,
   removeCodexConnection: () =>
     ipcRenderer.invoke("connection:codex-remove") as Promise<CodexConnectionMutation>,
+  previewClaudeCodeConnection: () =>
+    ipcRenderer.invoke("connection:claude-code-preview") as Promise<ClaudeCodeConnectionPreview>,
+  applyClaudeCodeConnection: () =>
+    ipcRenderer.invoke("connection:claude-code-apply") as Promise<ClaudeCodeConnectionMutation>,
+  removeClaudeCodeConnection: () =>
+    ipcRenderer.invoke("connection:claude-code-remove") as Promise<ClaudeCodeConnectionMutation>,
 };
 
 contextBridge.exposeInMainWorld("ownContext", api);
@@ -43,6 +51,8 @@ export interface ImportResponse {
   canceled: boolean;
   aborted: boolean;
   selectedPath?: string;
+  sample?: true;
+  suggestedQuery?: string;
   result?: unknown;
 }
 
@@ -169,6 +179,7 @@ export interface CodexConnectionPreview {
   canRemove: boolean;
   configExists: boolean;
   snippet: string;
+  allowedCollection: string;
   serverReady: boolean;
 }
 
@@ -178,7 +189,37 @@ export interface CodexConnectionMutation {
   changed: boolean;
   backupCreated: boolean;
   backupFileName?: string;
-  snippet?: string;
+}
+
+export interface ClaudeCodeConnectionPreview {
+  status:
+    | "absent"
+    | "managed"
+    | "managed_stale"
+    | "unmanaged_conflict"
+    | "config_too_large"
+    | "invalid_encoding"
+    | "invalid_json"
+    | "invalid_structure"
+    | "read_failed"
+    | "invalid_config_target"
+    | "invalid_launch";
+  canApply: boolean;
+  canRemove: boolean;
+  cliAvailable: boolean;
+  configExists: boolean;
+  snippet: string;
+  allowedCollection: string;
+  serverReady: boolean;
+}
+
+export interface ClaudeCodeConnectionMutation {
+  ok: boolean;
+  code: string;
+  changed: boolean;
+  backupCreated: boolean;
+  backupFileName?: string;
+  restored?: boolean;
 }
 
 export type OwnContextApi = typeof api;

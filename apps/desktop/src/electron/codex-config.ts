@@ -55,6 +55,8 @@ export interface OwnContextMcpLaunch {
   args: readonly string[];
   /** Absolute path to the private OwnContext SQLite vault. */
   vaultPath: string;
+  /** Single collection this AI-client connection may search. */
+  allowedCollection: string;
   runtime: "node" | "electron";
 }
 
@@ -282,6 +284,7 @@ export function renderOwnContextMcpBlock(launch: OwnContextMcpLaunch): string {
   const args = launch.args.map(tomlString).join(", ");
   const envEntries = [
     `OWNCONTEXT_VAULT_PATH = ${tomlString(launch.vaultPath)}`,
+    `OWNCONTEXT_ALLOWED_COLLECTION = ${tomlString(launch.allowedCollection)}`,
   ];
   if (launch.runtime === "electron") {
     envEntries.push('ELECTRON_RUN_AS_NODE = "1"');
@@ -310,6 +313,7 @@ function validateLaunch(launch: OwnContextMcpLaunch): void {
     (launch.runtime !== "node" && launch.runtime !== "electron") ||
     !isSafeAbsolutePath(launch.commandPath) ||
     !isSafeAbsolutePath(launch.vaultPath) ||
+    !isSafeCollection(launch.allowedCollection) ||
     !Array.isArray(launch.args) ||
     launch.args.length === 0 ||
     launch.args.length > 8 ||
@@ -317,6 +321,16 @@ function validateLaunch(launch: OwnContextMcpLaunch): void {
   ) {
     throw new InternalPathError();
   }
+}
+
+function isSafeCollection(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    value.trim().normalize("NFC") === value &&
+    !/\p{Cc}/u.test(value)
+  );
 }
 
 function isSafeAbsolutePath(value: unknown): value is string {
@@ -607,9 +621,33 @@ async function snapshotStillMatches(
     if (!loaded.exists || !metadata.isFile() || metadata.isSymbolicLink()) {
       return false;
     }
+    if (metadata.size !== loaded.bytes.byteLength) return false;
 
-    const current = await readFile(configPath);
-    return current.equals(loaded.bytes);
+    const handle = await open(configPath, "r");
+    try {
+      const openedMetadata = await handle.stat();
+      if (!openedMetadata.isFile() || openedMetadata.size !== loaded.bytes.byteLength) {
+        return false;
+      }
+      const current = Buffer.allocUnsafe(loaded.bytes.byteLength + 1);
+      let bytesRead = 0;
+      while (bytesRead < current.byteLength) {
+        const result = await handle.read(
+          current,
+          bytesRead,
+          current.byteLength - bytesRead,
+          bytesRead,
+        );
+        if (result.bytesRead === 0) break;
+        bytesRead += result.bytesRead;
+      }
+      return (
+        bytesRead === loaded.bytes.byteLength &&
+        current.subarray(0, bytesRead).equals(loaded.bytes)
+      );
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     return (
       !loaded.exists && isNodeError(error) && error.code === "ENOENT"

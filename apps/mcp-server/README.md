@@ -23,7 +23,7 @@ The executable entry point is `apps/mcp-server/dist/cli.js`. Standard output is
 reserved exclusively for MCP JSON-RPC framing. Startup and tool diagnostics are
 written to standard error.
 
-## Vault selection
+## Vault and collection selection
 
 The MCP tools cannot choose a database. The server resolves exactly one path at
 process startup:
@@ -37,13 +37,28 @@ process startup:
 A relative `OWNCONTEXT_VAULT_PATH` is rejected. The launcher creates the parent
 directory when needed; document paths are never accepted over MCP.
 
+The macOS and Unix path branches describe server path resolution only. The
+current packaged product target is Windows x64; macOS support and numeric
+minimum/recommended hardware requirements remain deferred until measured.
+
+The process is also pinned at startup to exactly one collection through
+`OWNCONTEXT_ALLOWED_COLLECTION`. If it is omitted or unsafe, startup fails
+closed. The desktop-managed Codex and Claude Code launches explicitly set it to
+`default`. A caller cannot widen this grant: a `search` request naming any other
+collection is denied, while omission searches only the allowed collection. This
+is default deny outside the single launch-time grant; collection selection,
+expiry, and multi-grant management are not implemented in the current desktop
+alpha.
+
 ## Tools
 
 ### `search`
 
 Required input: `query`. Optional inputs are `collection`, `createdFrom`,
-`createdTo`, `modifiedFrom`, `modifiedTo`, and `limit` (1–50). Results contain
-stable document and chunk IDs, title, snippet, source URI, and timestamps.
+`createdTo`, `modifiedFrom`, `modifiedTo`, and `limit` (1–50). `collection` may
+only repeat the process's launch-time allowed collection; it cannot select a
+different collection. Results contain stable document and chunk IDs, title,
+snippet, source URI, and timestamps.
 
 ### `fetch`
 
@@ -81,10 +96,35 @@ Codex local developer configuration in `config.toml`:
 [mcp_servers.owncontext]
 command = "node"
 args = ["C:/absolute/path/to/owncontext/apps/mcp-server/dist/cli.js"]
-env = { OWNCONTEXT_VAULT_PATH = "C:/absolute/path/to/vault.sqlite3" }
+env = { OWNCONTEXT_VAULT_PATH = "C:/absolute/path/to/vault.sqlite3", OWNCONTEXT_ALLOWED_COLLECTION = "default" }
 ```
 
-Claude Desktop local developer MCP configuration, when that feature is enabled:
+The desktop app writes the equivalent launch environment automatically.
+
+### Claude Code
+
+The desktop alpha can connect the generated OwnContext stdio launch as Claude
+Code's user-scoped `owncontext` server. It uses fixed arguments equivalent to
+`claude mcp add-json --scope user owncontext <generated OwnContext JSON>` and
+respects an absolute `CLAUDE_CONFIG_DIR`. The renderer sees a generated structure
+with private local paths redacted plus bounded status, never unrelated Claude
+configuration.
+
+An existing unmanaged or conflicting `owncontext` entry is refused. Before a
+mutation, the alpha backs up the complete existing Claude configuration file
+byte-for-byte beside the original. Because that full file may contain unrelated
+secrets or metadata and backups can accumulate, encryption, retention, and
+deletion behavior remain public-release gates. Windows DACL preservation,
+external-writer compare-and-swap safety, and persistence of custom override
+targets across update/uninstall environments are also unverified release gates.
+The discovered Claude executable
+is not yet authenticated by publisher signature, hash, provenance, or supported
+version, which is also a public-release gate.
+
+### Claude Desktop (planned)
+
+The following illustrates the planned local MCP shape; the current desktop app
+does not install a Claude Desktop Extension or manage this configuration:
 
 ```json
 {
@@ -95,7 +135,8 @@ Claude Desktop local developer MCP configuration, when that feature is enabled:
         "C:/absolute/path/to/owncontext/apps/mcp-server/dist/cli.js"
       ],
       "env": {
-        "OWNCONTEXT_VAULT_PATH": "C:/absolute/path/to/vault.sqlite3"
+        "OWNCONTEXT_VAULT_PATH": "C:/absolute/path/to/vault.sqlite3",
+        "OWNCONTEXT_ALLOWED_COLLECTION": "default"
       }
     }
   }
@@ -118,17 +159,29 @@ npm run test:protocol --workspace @owncontext/mcp-server
 The unit suite connects the official MCP `Client` to the server with the SDK's
 linked in-memory transport and a mocked core boundary. It checks tool listing,
 annotations, structured/text output parity, invalid stable IDs, failure
-redaction, and rejection of extra path/URL/SQL arguments. The protocol smoke
-test builds the CLI, imports a fixture into a temporary vault, and connects with
-the official stdio client transport; a successful exchange also detects stdout
-contamination because non-JSON-RPC output breaks the transport parser.
+redaction, fixed allowed-collection enforcement, and rejection of extra
+path/URL/SQL arguments. The protocol smoke test builds the CLI, imports fixtures
+into allowed and denied collections, and connects with the official stdio client
+transport; it verifies that denied canaries are not returned. A successful
+exchange also detects stdout contamination because non-JSON-RPC output breaks
+the transport parser.
 
 ## Trust boundary
 
 The server does not contact external services. Once a local AI client receives
 an excerpt, however, that client may send it to its configured model provider.
 Returned personal text is untrusted data and must not be treated as tool or
-system instructions.
+system instructions. Search results, fetched documents, and fetched chunks carry
+the fixed `contentTrust: "untrusted-user-data"` marker in structured output.
 
-Official host references: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
-and [Claude Desktop local MCP extensions](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
+Returned rows are restricted to the allowed collection, but the current vault
+uses one global FTS virtual table. Candidate work, term structures, cache and
+resource effects, and response timing are not fully partitioned by collection.
+No cross-collection content return is known from the prototype tests, but this
+is not yet evidence of side-channel non-interference. Physical candidate
+partitioning or an adequate timing/cache non-interference test is required
+before public release.
+
+Official host references: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Claude Code MCP configuration](https://code.claude.com/docs/en/mcp), and
+[Claude Desktop local MCP extensions](https://support.anthropic.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).

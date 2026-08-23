@@ -9,6 +9,10 @@ import {
   type OwnContextMcpLaunch,
 } from "../src/electron/codex-config.js";
 import {
+  createClaudeCodeConfigService,
+  renderClaudeCodeMcpConfig,
+} from "../src/electron/claude-code-config.js";
+import {
   beginSquirrelLifecycle,
   detectSquirrelEvent,
   type SquirrelLifecycleOptions,
@@ -117,6 +121,35 @@ describe("Squirrel.Windows lifecycle", () => {
     expect(operations).toEqual(["shortcut", "quit"]);
   });
 
+  it("refreshes a recognizable Claude Code entry before the old app path is retired", async () => {
+    const claudeConfigPath = join(root, "claude-update", ".claude.json");
+    await mkdir(join(root, "claude-update"), { recursive: true });
+    await writeFile(claudeConfigPath, `${JSON.stringify({
+      theme: "preserved",
+      mcpServers: { owncontext: renderClaudeCodeMcpConfig(oldLaunch) },
+    }, null, 2)}\n`, "utf8");
+    const operations: string[] = [];
+    const started = beginSquirrelLifecycle(options("--squirrel-updated", {
+      createClaudeCodeConfigService: () => createClaudeCodeConfigService({
+        configPath: claudeConfigPath,
+        environment: { PATH: "" },
+        homeDirectory: root,
+      }),
+      runUpdate: async () => {
+        operations.push("shortcut");
+      },
+      quit: () => operations.push("quit"),
+    }));
+
+    if (!started.handled) throw new Error("updated event was not handled");
+    expect(await started.completion).toMatchObject({ event: "updated", failures: [] });
+    expect(JSON.parse(await readFile(claudeConfigPath, "utf8"))).toEqual({
+      theme: "preserved",
+      mcpServers: { owncontext: renderClaudeCodeMcpConfig(newLaunch) },
+    });
+    expect(operations).toEqual(["shortcut", "quit"]);
+  });
+
   it("leaves unmanaged and malformed Codex configurations untouched on update", async () => {
     await mkdir(join(root, ".codex"), { recursive: true });
     const fixtures = [
@@ -204,6 +237,38 @@ describe("Squirrel.Windows lifecycle", () => {
     ]);
   });
 
+  it("revokes a managed Claude Code entry on uninstall without requiring its CLI", async () => {
+    const claudeConfigPath = join(root, "claude", ".claude.json");
+    await mkdir(join(root, "claude"), { recursive: true });
+    await writeFile(claudeConfigPath, `${JSON.stringify({
+      theme: "preserved",
+      mcpServers: {
+        other: { type: "stdio", command: "other" },
+        owncontext: renderClaudeCodeMcpConfig(newLaunch),
+      },
+    }, null, 2)}\n`, "utf8");
+    const operations: string[] = [];
+    const started = beginSquirrelLifecycle(options("--squirrel-uninstall", {
+      createClaudeCodeConfigService: () => createClaudeCodeConfigService({
+        configPath: claudeConfigPath,
+        environment: { PATH: "" },
+        homeDirectory: root,
+      }),
+      runUpdate: async (args) => {
+        operations.push(args[0]!);
+      },
+      quit: () => operations.push("quit"),
+    }));
+
+    if (!started.handled) throw new Error("uninstall event was not handled");
+    expect(await started.completion).toMatchObject({ event: "uninstall", failures: [] });
+    expect(JSON.parse(await readFile(claudeConfigPath, "utf8"))).toEqual({
+      theme: "preserved",
+      mcpServers: { other: { type: "stdio", command: "other" } },
+    });
+    expect(operations).toEqual(["--removeShortcut=OwnContext.exe", "quit"]);
+  });
+
   it("attempts later required steps and quits once after failures", async () => {
     const operations: string[] = [];
     const failures: string[] = [];
@@ -276,6 +341,7 @@ describe("Squirrel.Windows lifecycle", () => {
       commandPath,
       args: [join(root, "resources", "mcp-server", "cli.mjs")],
       vaultPath: join(root, "user-data", "owncontext.sqlite"),
+      allowedCollection: "default",
       runtime: "electron",
     };
   }

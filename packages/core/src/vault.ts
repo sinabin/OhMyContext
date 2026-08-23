@@ -12,6 +12,13 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { chunkDocument, normalizeText, titleFromText } from "./chunking.js";
 import { assertHashId, contentHash, deterministicId } from "./ids.js";
+import {
+  OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,
+  OWNCONTEXT_SAMPLE_LIBRARY_FILES,
+  OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+  OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL,
+  verifyOwnContextSampleLibraryDirectory,
+} from "./sample.js";
 import { initializeSchema } from "./schema.js";
 import type {
   DeletionReceipt,
@@ -40,11 +47,22 @@ const DEFAULT_MAX_FILES = 10_000;
 const DEFAULT_CHUNK_SIZE = 1_400;
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 50;
+const MAX_SCOPED_RANK_TERMS = 16;
 const DEFAULT_NEIGHBORS = 1;
 const MAX_NEIGHBORS = 5;
 const DEFAULT_FETCH_CHARS = 12_000;
 const MAX_FETCH_CHARS = 50_000;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const OWNCONTEXT_SAMPLE_IMPORT_FILES = new Map(
+  OWNCONTEXT_SAMPLE_LIBRARY_FILES
+    .filter((file) => /\.(?:md|txt)$/iu.test(file.name))
+    .map((file) => [file.name, Buffer.from(file.content, "utf8")] as const),
+);
+
+interface InternalImportOptions {
+  provenanceRootUri?: string;
+  exactFiles?: ReadonlyMap<string, Buffer<ArrayBufferLike>>;
+}
 
 interface VaultState {
   db: DatabaseSync;
@@ -188,10 +206,43 @@ export function openVault(dbPath: string): Vault {
   return new VaultHandle(resolvedPath, db);
 }
 
-export async function importDirectory(
+export function importDirectory(
   vault: Vault,
   directoryPath: string,
   options: ImportDirectoryOptions = {},
+): Promise<ImportDirectoryResult> {
+  return importDirectoryInternal(vault, directoryPath, options);
+}
+
+export async function importOwnContextSampleLibrary(
+  vault: Vault,
+  directoryPath: string,
+  options: Pick<ImportDirectoryOptions, "signal" | "onProgress"> = {},
+): Promise<ImportDirectoryResult> {
+  const verifiedDirectory = await verifyOwnContextSampleLibraryDirectory(
+    directoryPath,
+  );
+  return importDirectoryInternal(
+    vault,
+    verifiedDirectory,
+    {
+      ...options,
+      collection: OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,
+      sourceName: OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL,
+      maxFiles: OWNCONTEXT_SAMPLE_IMPORT_FILES.size,
+    },
+    {
+      provenanceRootUri: OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+      exactFiles: OWNCONTEXT_SAMPLE_IMPORT_FILES,
+    },
+  );
+}
+
+async function importDirectoryInternal(
+  vault: Vault,
+  directoryPath: string,
+  options: ImportDirectoryOptions,
+  internal: InternalImportOptions = {},
 ): Promise<ImportDirectoryResult> {
   const state = stateFor(vault);
   const db = state.db;
@@ -216,7 +267,9 @@ export async function importDirectory(
     100_000,
   );
   const root = await safeRoot(directoryPath);
-  const rootUri = directoryUri(root);
+  const rootUri = internal.provenanceRootUri === undefined
+    ? directoryUri(root)
+    : sampleProvenanceRootUri(internal.provenanceRootUri);
   const sourceName = boundedText(
     options.sourceName ?? (basename(root) || root),
     "sourceName",
@@ -273,6 +326,16 @@ export async function importDirectory(
         (processed) => progress("discovering", processed, null),
       );
       const candidates = discovery.files;
+      if (internal.exactFiles) {
+        const actualNames = candidates.map((candidate) => candidate.relativePath);
+        const expectedNames = [...internal.exactFiles.keys()].sort(compareNames);
+        if (
+          actualNames.length !== expectedNames.length ||
+          actualNames.some((name, index) => name !== expectedNames[index])
+        ) {
+          throw new Error("Built-in sample import inventory changed during verification.");
+        }
+      }
       progress("discovering", discovery.visited, discovery.visited);
       const seenRelativePaths = new Set<string>();
       let processed = 0;
@@ -296,8 +359,13 @@ export async function importDirectory(
           maxFileBytes,
           issues,
           options.signal,
+          internal.provenanceRootUri === undefined ? undefined : rootUri,
+          internal.exactFiles?.get(candidate.relativePath),
         );
         if (!file) {
+          if (internal.exactFiles) {
+            throw new Error("Built-in sample bytes changed during import.");
+          }
           processed += 1;
           progress("importing", processed, candidates.length);
           continue;
@@ -316,6 +384,16 @@ export async function importDirectory(
         else unchanged += 1;
         processed += 1;
         progress("importing", processed, candidates.length);
+      }
+
+      if (internal.exactFiles) {
+        const expectedNames = [...internal.exactFiles.keys()];
+        const placeholders = expectedNames.map(() => "?").join(", ");
+        db.prepare(`
+          DELETE FROM documents
+          WHERE source_id = ?
+            AND relative_path NOT IN (${placeholders})
+        `).run(sourceId, ...expectedNames);
       }
 
       progress("finalizing", processed, candidates.length);
@@ -539,17 +617,33 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
     "d.current_revision_id = c.revision_id",
     "s.last_scanned_at IS NOT NULL",
   ];
-  const parameters: SQLInputValue[] = [literalFtsQuery(query)];
+  const whereParameters: SQLInputValue[] = [literalFtsQuery(query)];
+  const scoreParameters: SQLInputValue[] = [];
+  const collectionScoped = input.collection !== undefined;
 
-  if (input.collection !== undefined) {
+  if (collectionScoped) {
     conditions.push("s.collection = ?");
-    parameters.push(boundedText(input.collection, "collection", 128));
+    whereParameters.push(boundedText(input.collection!, "collection", 128));
   }
-  addDateFilter(conditions, parameters, "d.created_at", ">=", input.createdFrom, "createdFrom");
-  addDateFilter(conditions, parameters, "d.created_at", "<=", input.createdTo, "createdTo");
-  addDateFilter(conditions, parameters, "d.modified_at", ">=", input.modifiedFrom, "modifiedFrom");
-  addDateFilter(conditions, parameters, "d.modified_at", "<=", input.modifiedTo, "modifiedTo");
-  parameters.push(limit);
+  addDateFilter(conditions, whereParameters, "d.created_at", ">=", input.createdFrom, "createdFrom");
+  addDateFilter(conditions, whereParameters, "d.created_at", "<=", input.createdTo, "createdTo");
+  addDateFilter(conditions, whereParameters, "d.modified_at", ">=", input.modifiedFrom, "modifiedFrom");
+  addDateFilter(conditions, whereParameters, "d.modified_at", "<=", input.modifiedTo, "modifiedTo");
+
+  const scopedScoreTerms = collectionScoped
+    ? query.split(/\s+/u).filter(Boolean).slice(0, MAX_SCOPED_RANK_TERMS)
+    : [];
+  const scopedScoreParts = scopedScoreTerms.map((term) => {
+    scoreParameters.push(term, term, term);
+    return [
+      "CASE WHEN instr(lower(chunks_fts.title), lower(?)) > 0 THEN 4 ELSE 0 END",
+      "CASE WHEN instr(lower(chunks_fts.heading_path), lower(?)) > 0 THEN 2 ELSE 0 END",
+      "CASE WHEN instr(lower(chunks_fts.content), lower(?)) > 0 THEN 1 ELSE 0 END",
+    ].join(" + ");
+  });
+  const scoreExpression = collectionScoped
+    ? `0.0 - (${scopedScoreParts.join(" + ")})`
+    : "bm25(chunks_fts, 0.0, 0.0, 0.0, 0.3, 0.1, 1.0)";
 
   let rows: SearchRow[];
   try {
@@ -562,15 +656,15 @@ export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchR
         d.source_uri,
         d.created_at,
         d.modified_at,
-        bm25(chunks_fts, 0.0, 0.0, 0.0, 0.3, 0.1, 1.0) AS score
+        ${scoreExpression} AS score
       FROM chunks_fts
       JOIN chunks c ON c.id = chunks_fts.chunk_id
       JOIN documents d ON d.id = c.document_id
       JOIN sources s ON s.id = d.source_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY score, d.modified_at DESC, c.chunk_index
+      ORDER BY score, d.modified_at DESC, d.id, c.chunk_index
       LIMIT ?
-    `).all(...parameters) as unknown as SearchRow[];
+    `).all(...scoreParameters, ...whereParameters, limit) as unknown as SearchRow[];
   } catch (error) {
     if (isFtsSyntaxError(error)) rows = [];
     else throw error;
@@ -1122,6 +1216,8 @@ async function prepareFile(
   maxFileBytes: number,
   issues: ImportIssue[],
   signal: AbortSignal | undefined,
+  provenanceRootUri: string | undefined,
+  exactBytes: Buffer<ArrayBufferLike> | undefined,
 ): Promise<PreparedFile | null> {
   let fileHandle;
   try {
@@ -1160,6 +1256,14 @@ async function prepareFile(
     throwIfAborted(signal);
     const buffer = await fileHandle.readFile();
     throwIfAborted(signal);
+    if (exactBytes !== undefined && !buffer.equals(exactBytes)) {
+      issues.push({
+        code: "read-error",
+        path: candidate.relativePath,
+        message: "Built-in sample bytes changed during import",
+      });
+      return null;
+    }
     if (buffer.byteLength > maxFileBytes) {
       issues.push({
         code: "too-large",
@@ -1188,7 +1292,9 @@ async function prepareFile(
       contentHash: contentHash(content),
       createdAt: validIso(birth),
       modifiedAt: validIso(info.mtime),
-      sourceUri: pathToFileURL(candidate.absolutePath).href,
+      sourceUri: provenanceRootUri === undefined
+        ? pathToFileURL(candidate.absolutePath).href
+        : provenanceDocumentUri(provenanceRootUri, candidate.relativePath),
       title: titleFromText(content, fallbackTitle),
     };
   } catch (error) {
@@ -1218,6 +1324,49 @@ function isWithin(root: string, candidate: string): boolean {
 
 function directoryUri(root: string): string {
   return pathToFileURL(root.endsWith(sep) ? root : `${root}${sep}`).href;
+}
+
+function sampleProvenanceRootUri(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > 2048 ||
+    value.includes("\0")
+  ) {
+    throw new TypeError("provenanceRootUri must be a bounded sample URI");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new TypeError("provenanceRootUri must be an absolute sample URI");
+  }
+  if (
+    parsed.protocol !== "owncontext-sample:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.hostname.length === 0 ||
+    !parsed.pathname.endsWith("/") ||
+    parsed.href !== value
+  ) {
+    throw new TypeError("provenanceRootUri must be a canonical owncontext-sample URI");
+  }
+  return parsed.href;
+}
+
+function provenanceDocumentUri(rootUri: string, relativePath: string): string {
+  const encodedPath = relativePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const uri = new URL(encodedPath, rootUri).href;
+  if (!uri.startsWith(rootUri)) {
+    throw new Error("Virtual provenance path escaped its sample root");
+  }
+  return uri;
 }
 
 function isSupportedTextFile(name: string): boolean {

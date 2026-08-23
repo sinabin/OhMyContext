@@ -7,17 +7,20 @@ Last updated: 2026-08-23
 OwnContext now has a runnable developer alpha. Automated prototype tests cover
 atomic import and cancellation, selected path and symlink boundaries, revision
 and document/source purge behavior, persistent content-free source deletion
-receipts, collection/date filtering, query-text minimization,
-read-only MCP input and issued-ID boundaries, stdio framing, and reversible
-Codex configuration edits. The Electron window is built with renderer sandboxing,
+receipts, collection/date filtering, query-text minimization, one launch-time
+allowed MCP collection, read-only MCP input and issued-ID boundaries, stdio
+framing, trusted main-process sample provenance, and reversible Codex and Claude
+Code configuration edits. The Electron window is built with renderer sandboxing,
 context isolation, a CommonJS preload bridge, no Node integration, and a
 restrictive local content security policy. Main-process IPC accepts only the
 expected local main frame, renderer navigation and new windows are blocked, and
 source purge receives an independent native final confirmation.
 
 This is not evidence that the product is safe for sensitive personal data.
-Application-level encryption, complete parser isolation, per-client collection
-grants, signed packaging and updates, comprehensive filesystem adversarial
+Application-level encryption, complete parser isolation, user-selected and
+expiring per-client grants, global-FTS side-channel isolation, safe lifecycle for
+whole Claude configuration backups, authenticated AI-client executable
+discovery, signed packaging and updates, comprehensive filesystem adversarial
 coverage, and packaged-release validation remain unimplemented or unverified.
 
 Security status uses three labels:
@@ -74,7 +77,34 @@ Document titles, file paths, source URLs, contact names, collection names, and a
 
 The local operating-system account, OwnContext core, connector/parser processes, MCP client, external AI provider, update channel, and future sync service are separate trust boundaries.
 
-“Local MCP” describes where retrieval executes. It does **not** mean retrieved excerpts remain local: when Claude, Codex, or another client sends them to a cloud model, those excerpts cross into that provider's trust boundary. The connection screen must name the destination, accessible collections, grant duration, and last disclosed document identifiers before the user enables it.
+The built-in sample is a special trusted-source path, not an untrusted renderer
+import. The main process materializes a fixed, byte-verified inventory beneath
+Electron's application-data directory and assigns the virtual
+`owncontext-sample://library/v1/` provenance root. Renderer IPC accepts no
+sample path or provenance URI, and the physical application-data path is not
+returned to the renderer. This exception must remain unavailable to ordinary
+imports and connector input.
+
+AI-client configuration files and their backups are inside the local
+filesystem trust boundary but are separate sensitive assets from the vault. In
+particular, a Claude Code mutation currently creates a byte-for-byte backup of
+the complete Claude configuration file. It can contain unrelated credentials or
+metadata and a new adjacent backup can be created for each mutation. Renderer
+previews expose only generated OwnContext JSON/status, not that file's unrelated
+contents; this UI boundary does not mitigate plaintext backup residue. On
+Windows, the alpha has not demonstrated that replacement files and adjacent
+backups preserve or tighten a pre-existing DACL, and its file compare followed
+by rename is not an OS-level compare-and-swap. Sensitive-data use and public
+release therefore remain blocked on ACL-preserving writes, race-safe replacement,
+and tested recovery.
+
+“Local MCP” describes where retrieval executes. It does **not** mean returned
+excerpts and provenance metadata remain local: a client may send titles, source
+paths, timestamps, stable IDs, and text to its model provider. The alpha names
+the destination, accessible collection, grant duration, and metadata categories.
+Per-client last-disclosed IDs are not yet available and remain a public-release
+gate because current retrieval events do not distinguish desktop search from a
+specific Codex or Claude connection.
 
 ## Adversaries and failure cases
 
@@ -134,7 +164,22 @@ in plaintext.
 ### Retrieval authorization
 
 - Apply vault, connection, collection, source, sensitivity, authorship, and date authorization **before** candidate generation and ranking.
-- Default deny. A new AI connection has no collection access until the user grants it, and grants are visible, scoped, revocable, and optionally expiring.
+- Default deny outside the explicit launch grant. The current desktop starts a
+  managed MCP connection only after user action and pins that process to one
+  allowed collection, currently `default`. The standalone server refuses to
+  start when `OWNCONTEXT_ALLOWED_COLLECTION` is missing or unsafe. It does not
+  implement a zero-collection state. User-selected collections, multiple grants, and grant
+  expiry remain target controls rather than current behavior.
+- The current MCP layer forces `search` to its one launch-time allowed
+  collection, rejects a conflicting requested collection, and permits `fetch`
+  only for IDs issued on the same connection. Returned rows are filtered by
+  collection before disclosure.
+- The current vault nevertheless uses one global FTS virtual table. Candidate
+  work, shared term structures, cache/resource effects, and response timing are
+  not physically partitioned by collection. This means the prototype has not
+  demonstrated side-channel non-interference even though its canary tests do not
+  return denied rows. Candidate partitioning or adequate non-interference
+  evidence is required before release.
 - MCP exposes only bounded read-only `search` and `fetch`. It accepts no arbitrary filesystem path, URL, SQL, command, sync, delete, or connector parameter.
 - Return opaque stable IDs. `fetch` may resolve only an ID issued from the same vault and authorized to the calling connection; it rechecks authorization rather than trusting a prior result.
 - Enforce request, result-count, excerpt-size, neighboring-context, concurrency, and time limits.
@@ -143,10 +188,20 @@ in plaintext.
 ### MCP and AI disclosure
 
 - Local MCP uses `stdio`; it opens no network listener in the initial product.
+- Desktop-managed Codex and Claude Code launches carry the vault path and the
+  fixed allowed collection from trusted main-process state; renderer input
+  cannot replace them. Claude Code registration is user-scoped and respects an
+  absolute `CLAUDE_CONFIG_DIR`. The alpha does not yet persist custom override
+  targets across Explorer/Squirrel environment changes, so update or uninstall
+  can miss a grant created from a shell-local override; target registration and
+  multi-target revocation are public-release gates.
 - Protocol stdout contains JSON-RPC only. Diagnostics go to stderr and are content-minimized.
 - Tool metadata declares read-only, closed-world behavior, but annotations are not treated as an enforcement boundary.
 - Each returned item includes provenance and an untrusted-content marker. OwnContext does not concatenate retrieved text into executable instructions.
-- The UI distinguishes fully offline local search from a cloud-AI flow and records locally which document IDs and source ranges were disclosed. Audit records exclude excerpt bodies by default.
+- The UI distinguishes fully offline local search from a cloud-AI flow. The
+  prototype records content-free retrieval IDs, but those events are not yet
+  attributable to a particular external client and therefore do not satisfy the
+  planned per-client disclosure history. Audit records exclude excerpt bodies.
 - Changing a connection's executable, destination, or requested permissions requires a new preview and consent.
 
 ### Connectors and credentials
@@ -178,20 +233,25 @@ in plaintext.
 - Sign desktop installers, application bundles, updates, connector packages, and registry policy. Reject missing, invalid, downgraded, or wrong-channel signatures.
 - Update verification happens before execution and preserves a recoverable prior version. Database migrations require backup, rollback or forward-recovery tests, and authenticated version metadata.
 - Project signing keys use restricted release automation and must not be stored in the repository or developer test fixtures.
+- Treat the Codex or Claude executable selected for configuration as a
+  supply-chain input. Bounded path/manifest discovery alone is insufficient for
+  public release: supported version, canonical source, publisher/signature, and
+  hash policy must be verified before invoking a discovered client binary.
 
 ## Control status by milestone
 
 | Control area | First implementation target | Public-release requirement | Current status |
 | --- | --- | --- | --- |
 | Path boundaries, deterministic hashes, atomic import/cancel/delete behavior | Milestone 1 | Regression suite passes on packaged app | Prototype verified for current folder importer and source-purge fixtures |
-| FTS candidate filtering by collection and date | Milestone 1 | Cross-collection canary suite passes | Prototype verified; per-client grants not implemented |
+| Collection-scoped retrieval and FTS isolation | Milestones 1 and 6 | Returned-row canaries plus candidate/cache/timing non-interference pass | Returned rows prototype-verified for one launch-time allowed collection; global FTS candidate work and side channels are not partitioned or verified |
 | Read-only bounded `search`/`fetch`, search-issued IDs, stdio separation | Milestone 2 | Real-client protocol and authorization tests pass | Prototype verified with SDK client and real child process |
-| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability and disclosure test passes | Prototype verified for config filesystem cases; usability untested |
+| Built-in sample provenance | Milestone 3 | Packaged IPC/path/provenance adversarial suite passes | Prototype verified for fixed inventory, virtual URI, and main-process-only path/override boundary |
+| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability, per-client history, ACL/race-safe recovery, and disclosure tests pass | Codex and user-scoped Claude Code cases prototype-tested for non-sensitive fixtures; override-target tracking, DACL preservation, atomic CAS, and whole-backup lifecycle unverified; Claude Desktop Extension planned |
 | Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Source-level logical purge and receipt prototype verified; portable export and complete residue coverage remain designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
 | Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Designed |
 | Parser process isolation and resource limits | Milestone 6 | Required for every untrusted format | Designed |
-| Signed installers/updates/connectors, SBOM, release artifact checks | Milestone 6 | Required | Designed |
+| Signed installers/updates/connectors, authenticated client executables, SBOM, release artifact checks | Milestone 6 | Required | Unsigned developer preview and draft artifact evidence exist; signing and client source/publisher validation remain designed |
 | Cross-vault, injection-impact, deletion, export, and log suites | Milestone 6 | Required with zero unauthorized canary disclosure | Designed |
 
 Passing an earlier prototype test does not waive a later packaged-release test.
@@ -210,6 +270,19 @@ The release evidence must include at least:
 8. **At-rest inspection** — with the vault locked and app stopped, a disk scan cannot recover protected fixture canaries from database, index, WAL, temporary, or backup files.
 9. **Update tampering** — modified, unsigned, downgraded, replayed, or wrong-channel packages are rejected without running migration code.
 10. **Cloud boundary UX** — representative non-developers can identify whether an excerpt stays local or is sent to a named external provider before enabling the connection.
+11. **FTS non-interference** — denied-collection corpus size, terms, cache state,
+    and query matches cannot produce a release-blocking timing, memory, I/O, or
+    error distinction for an allowed connection; otherwise candidate generation
+    is physically partitioned before release.
+12. **AI configuration residue and integrity** — unrelated secret canaries in a
+    Claude configuration never reach renderer previews; replacement and backup
+    DACLs do not broaden access; external concurrent writes are never lost; and
+    every whole-file backup has tested encryption, bounded retention, discovery,
+    and deletion.
+13. **Launcher and sample boundary** — shadowed, replaced, unsigned, wrong-source,
+    or unsupported client executables are rejected; renderer requests cannot
+    choose a sample filesystem path or provenance override, and no physical
+    application-data path appears in sample provenance.
 
 Security and integrity tests require zero unauthorized canary disclosures. Performance flakiness may be investigated; an access leak may not be averaged away.
 
@@ -220,6 +293,16 @@ A public binary, hosted update channel, or official connector registry is blocke
 - the application-level encryption design is reviewed and passes at-rest tests for database, index, WAL, temporary files, and backups;
 - OS credential-store integration and lock/key-rotation recovery pass on every supported OS;
 - collection and connection authorization, read-only MCP boundaries, and cross-vault canary tests pass;
+- FTS candidate generation is collection-partitioned, or candidate/cache/timing
+  non-interference passes a documented release threshold;
+- complete AI-client configuration backups are encrypted and have tested,
+  bounded retention, discovery, and deletion behavior;
+- AI-client configuration replacement preserves or tightens Windows DACLs,
+  cannot overwrite an external concurrent write, tracks every supported
+  `CLAUDE_CONFIG_DIR` target across update/uninstall environments, and exposes a
+  tested recovery path;
+- every invoked Codex and Claude binary passes supported-version, source,
+  publisher/signature, and hash policy checks;
 - parser isolation and malformed-input/resource-exhaustion tests pass for every enabled format;
 - lineage purge and export-exclusion suites pass;
 - installers, updates, connectors, and registry metadata are signed and tamper/downgrade tests pass;
@@ -240,10 +323,13 @@ Developer prototypes may precede these gates only when clearly labeled, restrict
 
 `[Verification limitation]` The controls marked Prototype verified have passed only
 in the development workspace on the current Windows machine and deterministic
-fixtures. They have not passed the complete adversarial matrix, supported macOS
-devices, an installer, or a signed packaged artifact. This does not block further
-alpha development with non-sensitive fixtures, but it blocks sensitive-data and
-public security claims. Public distribution remains blocked by the release gates
-above. Protection against an already compromised unlocked OS and an external AI
-provider's downstream handling remains outside the product boundary even after
-those gates pass.
+fixtures. An unsigned Windows x64 installer exists and has packaged smoke
+coverage, but it has not passed a clean-machine consumer install/uninstall
+exercise, the complete adversarial matrix, or signed-release validation. macOS
+support and numeric hardware requirements are deferred rather than verified.
+This does not block further local alpha development or free, no-key private EXE
+evaluation with non-sensitive fixtures, but it blocks sensitive-data and public
+security claims. Public distribution remains blocked by the release gates above,
+including license selection. Protection against an already compromised unlocked
+OS and an external AI provider's downstream handling remains outside the product
+boundary even after those gates pass.
