@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@owncontext/core": "*",
+    "better-sqlite3-multiple-ciphers": "13.0.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
