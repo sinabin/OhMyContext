@@ -233,6 +233,9 @@ in plaintext.
   invalidating the old schema; closing other clients and reopening resumes it.
   The 100,000-row regression bounds temporary WAL growth and retained history,
   but no `VACUUM` is claimed and an existing main database file is not shrunk.
+  A losing concurrent opener rechecks the version under a writer lock after a
+  blocked checkpoint, so a winner's completed v3 migration is adopted instead
+  of being misreported as a legacy-history pause.
 - Changing a connection's executable, destination, or requested permissions requires a new preview and consent.
 
 ### Connectors and credentials

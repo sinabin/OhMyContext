@@ -1576,6 +1576,103 @@ describe("vault ingestion and retrieval", () => {
     expect(rows.every((row) => row.client_kind === "legacy")).toBe(true);
   });
 
+  it("does not pause a losing opener after a concurrent migration reaches version three", async () => {
+    const { dbPath, vault } = await fixture();
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    const setup = new DatabaseSync(dbPath);
+    setup.exec(`
+      DROP TABLE retrieval_events;
+      CREATE TABLE retrieval_events (
+        id INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL CHECK(event_type IN ('search', 'fetch')),
+        query_hash TEXT CHECK(query_hash IS NULL OR length(query_hash) = 64),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        chunk_id TEXT REFERENCES chunks(id) ON DELETE SET NULL,
+        result_count INTEGER NOT NULL CHECK(result_count >= 0),
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX retrieval_events_created_idx ON retrieval_events(created_at);
+      INSERT INTO retrieval_events(
+        event_type, query_hash, document_id, chunk_id, result_count, created_at
+      ) VALUES
+        ('search', '${"cd".repeat(32)}', NULL, NULL, 2, '2026-08-23T02:03:04.005Z'),
+        ('search', '${"cd".repeat(32)}', NULL, NULL, 2, '2026-08-23T02:03:04.005Z');
+      PRAGMA user_version = 2;
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+    setup.close();
+
+    const baseProvider = createNodeSqliteDevelopmentStorageProvider();
+    let migrationInjected = false;
+    let pinnedReader: DatabaseSync | undefined;
+    const raceProvider: VaultStorageProvider = {
+      descriptor: baseProvider.descriptor,
+      inspectSchemaVersion: baseProvider.inspectSchemaVersion,
+      open: (location) => {
+        const connection = baseProvider.open(location);
+        const wrapped: VaultStorageConnection = {
+          close: () => connection.close(),
+          exec: (sql) => connection.exec(sql),
+          prepare: (sql) => {
+            const statement = connection.prepare(sql);
+            const isCheckpoint = sql.trim().toLowerCase() ===
+              "pragma wal_checkpoint(truncate)";
+            return {
+              all: (...parameters) => statement.all(...parameters),
+              run: (...parameters) => statement.run(...parameters),
+              get: (...parameters) => {
+                if (isCheckpoint && !migrationInjected) {
+                  migrationInjected = true;
+                  const winner = openVault(location, {
+                    descriptor: baseProvider.descriptor,
+                    inspectSchemaVersion: () => 2,
+                    open: baseProvider.open,
+                  });
+                  try {
+                    pinnedReader = new DatabaseSync(location, { readOnly: true });
+                    pinnedReader.exec("BEGIN;");
+                    pinnedReader.prepare(
+                      "SELECT count(*) FROM retrieval_events",
+                    ).get();
+                  } finally {
+                    winner.close();
+                  }
+                }
+                return statement.get(...parameters);
+              },
+            };
+          },
+        };
+        return wrapped;
+      },
+    };
+
+    let racedOpen: Vault;
+    try {
+      racedOpen = openVault(dbPath, raceProvider);
+    } finally {
+      pinnedReader?.exec("ROLLBACK;");
+      pinnedReader?.close();
+    }
+    openVaults.push(racedOpen);
+
+    expect(migrationInjected).toBe(true);
+    expect(listRetrievalActivity(racedOpen)).toEqual([{
+      requestId: expect.stringMatching(HASH_ID_PATTERN),
+      occurredAt: "2026-08-23T02:03:04.005Z",
+      eventType: "search",
+      clientKind: "legacy",
+      resultCount: 2,
+    }]);
+    const inspection = new DatabaseSync(dbPath, { readOnly: true });
+    const version = inspection.prepare("PRAGMA user_version").get() as {
+      user_version: number | bigint;
+    };
+    inspection.close();
+    expect(Number(version.user_version)).toBe(3);
+  }, 10_000);
+
   it("opens a healthy current vault without competing for an active writer slot", async () => {
     const { dbPath } = await fixture();
     const writer = new DatabaseSync(dbPath);

@@ -42,6 +42,11 @@ export function initializeSchema(
   // batches and truncate WAL between them while the old schema remains valid.
   boundLegacyRetrievalRowsBeforeMigration(db);
 
+  // A concurrent opener may have completed the upgrade while this connection
+  // was coordinating a legacy WAL checkpoint. Reuse the lock-free current-v3
+  // path instead of taking an unnecessary writer transaction afterward.
+  if (currentSchemaNeedsNoMaintenance(db)) return;
+
   db.exec("BEGIN IMMEDIATE;");
   try {
     // The read-only compatibility inspection happens before open and can become
@@ -91,7 +96,13 @@ function boundLegacyRetrievalRowsBeforeMigration(
     // deletion batch. Never append another batch—or enter the final table
     // replacement—until that WAL has actually been truncated. This makes
     // repeated retries with the same pinned reader write-idempotent.
-    requireTruncatedWalCheckpoint(db);
+    if (!truncatedWalCheckpointSucceeded(db)) {
+      // The observed v1/v2 generation may already be stale. Serialize a final
+      // version read with concurrent migrators before surfacing a pause; a
+      // winner that reached v3 makes the legacy checkpoint unnecessary.
+      if (!schemaStillNeedsMigrationUnderLock(db)) return;
+      throw historyMigrationPausedError();
+    }
 
     db.exec("BEGIN IMMEDIATE;");
     let deleted = 0;
@@ -140,20 +151,42 @@ function boundLegacyRetrievalRowsBeforeMigration(
   }
 }
 
-function requireTruncatedWalCheckpoint(db: VaultStorageConnection): void {
+function truncatedWalCheckpointSucceeded(db: VaultStorageConnection): boolean {
   const result = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
     busy?: number | bigint;
     log?: number | bigint;
     checkpointed?: number | bigint;
   } | undefined;
-  if (
-    Number(result?.busy ?? 1) !== 0 ||
-    Number(result?.log ?? 1) !== 0
-  ) {
-    throw new Error(
-      "Vault history migration paused because another reader prevented a bounded WAL checkpoint. Close other OwnContext clients and retry.",
-    );
+  return Number(result?.busy ?? 1) === 0 && Number(result?.log ?? 1) === 0;
+}
+
+function schemaStillNeedsMigrationUnderLock(
+  db: VaultStorageConnection,
+): boolean {
+  try {
+    db.exec("BEGIN IMMEDIATE;");
+  } catch {
+    throw historyMigrationPausedError();
   }
+  try {
+    const version = liveSchemaVersion(db);
+    assertSupportedSchemaVersion(version);
+    db.exec("COMMIT;");
+    return version < SCHEMA_VERSION;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK;");
+    } catch {
+      // Preserve the schema/version error if SQLite already ended the lock.
+    }
+    throw error;
+  }
+}
+
+function historyMigrationPausedError(): Error {
+  return new Error(
+    "Vault history migration paused because another reader prevented a bounded WAL checkpoint. Close other OwnContext clients and retry.",
+  );
 }
 
 function currentSchemaNeedsNoMaintenance(db: VaultStorageConnection): boolean {

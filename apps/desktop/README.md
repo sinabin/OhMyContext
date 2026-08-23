@@ -328,7 +328,9 @@ schema remains valid and the next launch resumes. A 100,000-row regression
 fixture verifies that only the newest 10,000 physical rows survive and that WAL
 peak growth stays bounded. This protects temporary free space but deliberately
 does not run `VACUUM`, so it does not promise to shrink an already allocated
-main database file.
+main database file. If another opener completes v3 between the initial version
+read and a blocked checkpoint, the losing opener serializes a fresh version
+read and adopts that completed schema instead of reporting a stale pause.
 
 The current core requires callers to select the visibly labeled plaintext
 development storage provider; there is no implicit storage fallback. A separate
