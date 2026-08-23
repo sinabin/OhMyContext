@@ -50,7 +50,7 @@ Acceptance:
 
 ## Milestone 2 — Read-only MCP adapter
 
-Status: planned
+Status: completed
 
 Deliverables:
 
