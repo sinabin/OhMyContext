@@ -13,7 +13,8 @@ It is not a public consumer release. Application-level encryption, signed packag
 - Retrieved content is untrusted data and never grants permissions.
 - MCP access is read-only in the MVP.
 - Local storage does not imply that excerpts stay local when a cloud AI client requests them.
-- Users can export, revoke, and delete their data.
+- Portable export and user-facing revocation and deletion workflows remain
+  planned; the current alpha does not claim them as complete.
 
 ## Repository layout
 
@@ -42,31 +43,29 @@ Launch the desktop developer alpha:
 npm start --workspace @owncontext/desktop
 ```
 
-The first Electron invocation downloads its platform binary. End users will not
-need Node.js once a signed packaged build exists; packaging is not claimed by
-this repository yet.
+The first development Electron invocation downloads its platform binary. An
+unsigned Windows x64 developer-preview installer is now produced with
+`npm run make --workspace @owncontext/desktop`; its users do not need Node.js.
+This is not a signed or publicly releasable package, and no public-release claim
+is made while the security and licensing gates remain open.
 
 ## Implementation status
 
 | Area | Status |
 | --- | --- |
-| Product, connector, hardware, and security contracts | Complete baseline |
+| Product, connector, platform, and security contracts | Complete baseline |
 | Atomic local SQLite/FTS vault | Implemented and prototype-tested |
 | Read-only local stdio MCP | Implemented and real-protocol tested |
 | Desktop import, search, source health, and Codex config | Developer alpha |
 | Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
 
-## Initial hardware targets
+## Platform and hardware status
 
-These are support hypotheses, not measured product claims. Public requirements
-will be set only after the named-device benchmark in
-[docs/HARDWARE_REQUIREMENTS.md](docs/HARDWARE_REQUIREMENTS.md).
-
-| Tier | Initial target | Intended vault |
-| --- | --- | --- |
-| Minimum | 4-core 64-bit CPU, 8 GiB RAM, SSD with 15 GiB free | Up to 10,000 documents / 1 GiB normalized text |
-| Recommended | 6 modern cores or 8 threads, 16 GiB RAM, NVMe with 50 GiB free | Up to 50,000 documents / 5 GiB normalized text |
-| Large-vault | 8 modern cores, 32 GiB RAM, NVMe with 200 GiB free | Up to 250,000 documents / 20 GiB normalized text |
+The development target and first packaged distribution target are Windows x64.
+macOS support and numeric minimum/recommended hardware specifications are deferred.
+No CPU, memory, storage, collection-size, or latency figure is a support claim
+until it has been measured on the packaged build. See the
+[platform and measurement plan](docs/HARDWARE_REQUIREMENTS.md).
 
 Project licensing is intentionally pending the maintainer's Apache-2.0 versus AGPL decision. Until a license is added, the repository is not ready for public redistribution.
 
@@ -74,7 +73,8 @@ Project licensing is intentionally pending the maintainer's Apache-2.0 versus AG
 
 - [Korean product brief](docs/PRODUCT_PLAN.ko.md)
 - [Implementation milestones](docs/IMPLEMENTATION_PLAN.md)
-- [Initial hardware targets](docs/HARDWARE_REQUIREMENTS.md)
+- [Platform scope and measurement plan](docs/HARDWARE_REQUIREMENTS.md)
 - [Connector acquisition policy](docs/CONNECTOR_POLICY.md)
 - [Security and privacy model](docs/SECURITY_MODEL.md)
 - [Apache-2.0 versus AGPL-3.0 explainer](docs/LICENSE_OPTIONS.ko.md)
+- [Release compliance evidence](docs/RELEASE_COMPLIANCE.md)

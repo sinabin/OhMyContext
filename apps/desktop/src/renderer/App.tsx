@@ -452,7 +452,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
 
         <div className="permission-grid">
           <div><span>Tools</span><strong>search · fetch</strong></div>
-          <div><span>Vault writes</span><strong>Never</strong></div>
+          <div><span>Document writes</span><strong>None · audit log only</strong></div>
           <div><span>Network listener</span><strong>None · stdio</strong></div>
           <div><span>Audit</span><strong>Query hash · document IDs</strong></div>
         </div>
@@ -468,8 +468,10 @@ function ConnectionsView(props: ConnectionsViewProps) {
         <div className="connection-warning">
           <strong>Before connecting</strong>
           <p>
-            A timestamped backup is created before an existing file changes. Restart Codex after
-            applying. Cloud models may receive excerpts selected through these tools.
+            Installing OwnContext does not connect Codex. Updates refresh the connection only
+            while this marked block is already managed. A timestamped backup is created before an
+            existing file changes. Restart Codex after applying or updating. Cloud models may
+            receive excerpts selected through these tools.
           </p>
         </div>
 

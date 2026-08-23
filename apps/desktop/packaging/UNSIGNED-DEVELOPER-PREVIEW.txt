@@ -1,0 +1,12 @@
+OwnContext Developer Preview — UNSIGNED
+
+This artifact is an unsigned developer preview, not a public consumer release.
+It is intended only for non-sensitive evaluation data. Windows may display an
+Unknown Publisher or SmartScreen warning.
+
+The current vault is not protected by application-level encryption. Retrieved
+excerpts can leave the computer when an AI client sends them to a cloud model.
+There is no automatic updater, release signature, or consumer support promise.
+
+The project has not selected an open-source license. This artifact must not be
+publicly redistributed until the maintainer chooses distribution terms.

@@ -1,13 +1,21 @@
 {
   "name": "@owncontext/desktop",
+  "productName": "OwnContext Developer Preview",
   "version": "0.0.0",
   "private": true,
+  "description": "Unsigned local-first OwnContext developer preview for non-sensitive evaluation data.",
+  "author": "OwnContext project contributors",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "build": "npm run build:main && npm run build:renderer",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "node scripts/build-renderer.mjs",
+    "build:forge": "npm run build --workspace @owncontext/core && npm run build --workspace @owncontext/mcp-server && npm run build && node scripts/build-forge-runtime.mjs",
+    "package:win": "npm run build:forge && node scripts/make-windows.mjs --package-only",
+    "make": "npm run build:forge && node scripts/make-windows.mjs",
+    "smoke:made": "node scripts/smoke-packaged.mjs --require-maker",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "start": "npm run build && electron .",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit && tsc -p tsconfig.test.json --noEmit"
@@ -18,10 +26,13 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.0",
     "electron": "^43.4.1",
+    "esbuild": "^0.28.2",
     "vite": "^8.2.2"
   }
 }

@@ -9,6 +9,9 @@ Last updated: 2026-08-23
 | Initial market | Global | English-first product copy with Unicode-safe ingestion; Korean remains a required retrieval benchmark. |
 | Desktop installation | Accepted | A signed desktop application is the primary onboarding path. No terminal is required for end users. |
 | Collection policy | All lawful routes | Prefer official export and read-only APIs, then user-initiated capture. Each connector must document authority and platform constraints. |
+| First desktop platform | Windows x64 | Continue Windows development and packaging. macOS support is deferred without a compatibility promise. |
+| Hardware specifications | Deferred | Publish no numeric minimum or recommended figures until a packaged build is measured; disclose only the tested Windows build and architecture. |
+| First public beta price | Free download | Do not add a payment or license-key gate to the Windows beta. This does not replace the separate open-source license decision. |
 | License | Deferred | Do not publish releases or accept external contributions until a license is selected. |
 
 ## Product boundary

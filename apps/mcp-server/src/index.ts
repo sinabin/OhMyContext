@@ -10,3 +10,4 @@ export {
   type OwnContextServerOptions,
   type VaultReadApi,
 } from "./server.js";
+export { runStdioServer } from "./stdio.js";

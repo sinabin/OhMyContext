@@ -31,7 +31,7 @@ describe("Codex OwnContext MCP configuration service", () => {
     configPath = join(codexDirectory, "config.toml");
     launch = {
       commandPath: join(testRoot, "runtime", "electron.exe"),
-      args: [join(testRoot, "app", "mcp-server.js")],
+      args: [join(testRoot, "app", "mcp-server.mjs")],
       vaultPath: join(testRoot, "data", "vault.sqlite"),
       runtime: "electron",
     };
@@ -111,6 +111,56 @@ describe("Codex OwnContext MCP configuration service", () => {
     expect(updated.match(new RegExp(escapeRegex(OWNCONTEXT_MARKER_START), "g"))).toHaveLength(
       1,
     );
+  });
+
+  it("refreshes only an existing managed block and never creates an absent one", async () => {
+    const service = createCodexConfigService({ configPath });
+    const absent = await service.refreshManaged(launch);
+    expect(absent).toMatchObject({
+      ok: true,
+      code: "unchanged",
+      changed: false,
+      backupCreated: false,
+    });
+    await expect(readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    await service.apply(launch);
+    const updatedLaunch = {
+      ...launch,
+      commandPath: join(testRoot, "updated", "OwnContext.exe"),
+    };
+    const refreshed = await service.refreshManaged(updatedLaunch);
+    expect(refreshed).toMatchObject({
+      ok: true,
+      code: "applied",
+      changed: true,
+      backupCreated: true,
+    });
+    expect(await readFile(configPath, "utf8")).toContain("updated");
+  });
+
+  it("does not recreate a managed block removed concurrently during refresh", async () => {
+    await createCodexConfigService({ configPath }).apply(launch);
+    const userOptOut = 'model = "keep-user-opt-out"\n';
+    const service = createCodexConfigService({
+      configPath,
+      beforeReplaceCheck: async () => {
+        await writeFile(configPath, userOptOut, "utf8");
+      },
+    });
+
+    const result = await service.refreshManaged({
+      ...launch,
+      commandPath: join(testRoot, "updated", "OwnContext.exe"),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "concurrent_change",
+      changed: false,
+      backupCreated: true,
+    });
+    expect(await readFile(configPath, "utf8")).toBe(userOptOut);
   });
 
   it("refuses an unmanaged owncontext table without changing or backing up the file", async () => {
@@ -316,10 +366,31 @@ describe("Codex OwnContext MCP configuration service", () => {
     });
   });
 
+  it("accepts only absolute MCP entry paths for Electron", async () => {
+    const service = createCodexConfigService({ configPath });
+
+    expect(await service.preview(launch)).toMatchObject({
+      canApply: true,
+    });
+
+    for (const args of [
+      [],
+      ["--inspect"],
+      ["relative-app", join(testRoot, "app", "mcp-server.mjs")],
+      [join(testRoot, "app", "mcp-server.mjs"), "--other-mode"],
+    ]) {
+      expect(await service.preview({ ...launch, args })).toMatchObject({
+        canApply: false,
+        snippet: "",
+      });
+    }
+  });
+
   it("emits no Electron override for a Node runtime", () => {
     const block = renderOwnContextMcpBlock({
       ...launch,
       commandPath: join(testRoot, "runtime", "node.exe"),
+      args: [join(testRoot, "app", "mcp-server.js")],
       runtime: "node",
     });
 

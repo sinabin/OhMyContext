@@ -81,6 +81,8 @@ export interface CodexConfigMutationResult {
 export interface CodexConfigService {
   preview(launch: OwnContextMcpLaunch): Promise<CodexConfigPreview>;
   apply(launch: OwnContextMcpLaunch): Promise<CodexConfigMutationResult>;
+  /** Update an existing managed block without recreating a removed connection. */
+  refreshManaged(launch: OwnContextMcpLaunch): Promise<CodexConfigMutationResult>;
   remove(): Promise<CodexConfigMutationResult>;
 }
 
@@ -174,6 +176,56 @@ export function createCodexConfigService(
       const nextText = loaded.managedRange
         ? replaceManagedBlock(loaded.text, loaded.managedRange, normalizedSnippet)
         : appendManagedBlock(loaded.text, normalizedSnippet, newline);
+
+      if (nextText === loaded.text) {
+        return {
+          ok: true,
+          code: "unchanged",
+          changed: false,
+          backupCreated: false,
+          snippet,
+        };
+      }
+
+      return mutateConfig(
+        configPath,
+        loaded,
+        nextText,
+        "applied",
+        snippet,
+        options.beforeReplaceCheck,
+      );
+    },
+
+    async refreshManaged(launch) {
+      const snippet = safeSnippet(launch);
+      if (snippet === undefined) {
+        return mutationFailure("invalid_path");
+      }
+
+      const loaded = await loadConfig(configPath);
+      const blockedCode = statusToFailureCode(loaded.status);
+      if (blockedCode) {
+        return { ...mutationFailure(blockedCode), snippet };
+      }
+
+      if (!loaded.managedRange) {
+        return {
+          ok: true,
+          code: "unchanged",
+          changed: false,
+          backupCreated: false,
+          snippet,
+        };
+      }
+
+      const newline = loaded.text.includes("\r\n") ? "\r\n" : "\n";
+      const normalizedSnippet = snippet.replaceAll("\n", newline);
+      const nextText = replaceManagedBlock(
+        loaded.text,
+        loaded.managedRange,
+        normalizedSnippet,
+      );
 
       if (nextText === loaded.text) {
         return {

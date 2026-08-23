@@ -18,7 +18,7 @@ Deliverables:
 
 - Git repository and Node.js workspace.
 - Confirmed product decisions and licensing hold.
-- Global hardware requirements with reference-device validation plan.
+- Windows x64 platform boundary and a deferred, evidence-based measurement plan.
 - Connector legality and capability policy.
 - Architecture and security boundaries.
 
@@ -67,8 +67,10 @@ Acceptance:
 
 ## Milestone 3 — Consumer desktop alpha
 
-Status: in progress — the developer alpha vertical slice is implemented; a
-packaged, signed, no-terminal installation remains outstanding.
+Status: in progress — the developer alpha and an unsigned Windows x64 Squirrel
+developer-preview installer are implemented. A clean-machine install/uninstall
+exercise, a signed public candidate, and a verified update channel remain
+outstanding.
 
 Deliverables:
 
@@ -122,14 +124,16 @@ Deliverables:
 
 - Multilingual lexical benchmark and optional local dense retrieval.
 - Encryption for database, indexes, temporary files, and backups.
-- OS keychain integration, signed updates, SBOM, and parser isolation.
+- Draft application-payload notices, SPDX SBOM, and checksums are implemented;
+  OS keychain integration, signed updates, complete outer-installer provenance,
+  and parser isolation remain release work.
 - Cross-vault leakage, prompt-injection impact, deletion, export, and log regression suites.
 
 Acceptance:
 
 - Dense retrieval ships only if it materially improves the agreed multilingual benchmark over FTS.
 - No unauthorized canary is returned in the full access-control test corpus.
-- Published hardware requirements are reproduced on named reference devices.
+- Any published Windows performance or hardware claim is reproduced on the named measured device and corpus.
 
 ## Commit policy
 

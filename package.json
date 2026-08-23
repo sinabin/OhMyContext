@@ -14,12 +14,18 @@
   "scripts": {
     "build": "npm run build --workspace @owncontext/core && npm run build --workspace @owncontext/mcp-server && npm run build --workspace @owncontext/desktop",
     "check": "npm run build && npm run typecheck && npm test && npm run test:protocol",
-    "test": "npm run build --workspace @owncontext/core && npm test --workspace @owncontext/core && npm test --workspace @owncontext/mcp-server && npm test --workspace @owncontext/desktop",
+    "test": "npm run build --workspace @owncontext/core && npm test --workspace @owncontext/core && npm test --workspace @owncontext/mcp-server && npm test --workspace @owncontext/desktop && npm run test:compliance",
     "test:protocol": "npm run test:protocol --workspace @owncontext/mcp-server",
+    "test:compliance": "vitest run test/release-compliance.test.ts",
     "test:watch": "vitest",
-    "typecheck": "npm run build --workspace @owncontext/core && npm run typecheck --workspace @owncontext/core && npm run typecheck --workspace @owncontext/mcp-server && npm run typecheck --workspace @owncontext/desktop"
+    "typecheck": "npm run build --workspace @owncontext/core && npm run typecheck --workspace @owncontext/core && npm run typecheck --workspace @owncontext/mcp-server && npm run typecheck --workspace @owncontext/desktop",
+    "compliance:generate": "node scripts/release-compliance.mjs generate",
+    "compliance:generate:draft": "node scripts/release-compliance.mjs generate --draft",
+    "compliance:verify": "node scripts/release-compliance.mjs verify",
+    "compliance:verify:draft": "node scripts/release-compliance.mjs verify --draft"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@types/node": "^22.17.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
