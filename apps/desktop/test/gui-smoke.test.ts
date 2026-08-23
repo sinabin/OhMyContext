@@ -28,6 +28,10 @@ describe("packaged GUI first-run smoke contract", () => {
         suggestedQuery: "weekly review",
         sampleProvenanceVerified: true,
         resultCardCount: 1,
+        connectionsScreenReady: true,
+        codexConnectionCardReady: true,
+        claudeCodeConnectionCardReady: true,
+        externalTransferBoundaryVisible: true,
       })),
     };
     const executeJavaScript = vi.mocked(renderer.executeJavaScript);
@@ -40,6 +44,10 @@ describe("packaged GUI first-run smoke contract", () => {
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 1,
+      connectionsScreenReady: true,
+      codexConnectionCardReady: true,
+      claudeCodeConnectionCardReady: true,
+      externalTransferBoundaryVisible: true,
     });
     expect(executeJavaScript).toHaveBeenCalledTimes(1);
     expect(executeJavaScript.mock.calls[0]?.[1]).toBe(true);
@@ -48,6 +56,10 @@ describe("packaged GUI first-run smoke contract", () => {
     expect(script).toContain("input[aria-label=\"Search personal context\"]");
     expect(script).toContain("requestSubmit()");
     expect(script).toContain(".result-card");
+    expect(script).toContain("AI connections");
+    expect(script).toContain('[aria-label="Codex connection"]');
+    expect(script).toContain('[aria-label="Claude Code connection"]');
+    expect(script).toContain("returned context may leave");
   });
 
   it.each([
@@ -59,6 +71,10 @@ describe("packaged GUI first-run smoke contract", () => {
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 0,
+      connectionsScreenReady: true,
+      codexConnectionCardReady: true,
+      claudeCodeConnectionCardReady: true,
+      externalTransferBoundaryVisible: true,
     },
     {
       sampleSourceReady: true,
@@ -66,6 +82,10 @@ describe("packaged GUI first-run smoke contract", () => {
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 1,
+      connectionsScreenReady: true,
+      codexConnectionCardReady: true,
+      claudeCodeConnectionCardReady: true,
+      externalTransferBoundaryVisible: true,
     },
   ])("rejects invalid or unbounded renderer evidence: %o", async (value) => {
     const renderer: GuiSmokeRenderer = {
@@ -95,11 +115,15 @@ describe("packaged GUI first-run smoke contract", () => {
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 2,
+      connectionsScreenReady: true,
+      codexConnectionCardReady: true,
+      claudeCodeConnectionCardReady: true,
+      externalTransferBoundaryVisible: true,
     });
 
     const result = JSON.parse(await readFile(context!.resultPath, "utf8"));
     expect(result).toEqual({
-      status: "first-run-sample-search-complete",
+      status: "first-run-sample-search-and-connections-preview-complete",
       nonce,
       isPackaged: true,
       sampleSourceReady: true,
@@ -107,6 +131,10 @@ describe("packaged GUI first-run smoke contract", () => {
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 2,
+      connectionsScreenReady: true,
+      codexConnectionCardReady: true,
+      claudeCodeConnectionCardReady: true,
+      externalTransferBoundaryVisible: true,
     });
   });
 });

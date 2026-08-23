@@ -50,7 +50,11 @@ unsigned Windows x64 developer-preview installer is now produced with
 The preview has no payment or license-key gate and is suitable only for private,
 non-sensitive local evaluation. This is not a signed or publicly releasable
 package, and no public-release claim is made while the security and licensing
-gates remain open.
+gates remain open. A source-bound draft manifest and outer SHA-256 list now bind
+the local Setup, Squirrel package, compliance evidence, Git commit, lockfile,
+and Authenticode status. The read-only Windows alpha workflow re-verifies this
+bundle but never creates a GitHub Release; it uploads unsigned binaries only
+while the repository is private.
 
 ## Implementation status
 

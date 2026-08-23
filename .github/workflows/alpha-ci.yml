@@ -1,0 +1,67 @@
+name: Windows alpha verification
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: owncontext-alpha-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-alpha:
+    name: Verify unsigned Windows alpha
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Use the supported Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run source and protocol verification
+        run: npm run check
+
+      - name: Build and verify the unsigned Windows alpha
+        run: npm run make --workspace @owncontext/desktop
+
+      - name: Locate the single clean-run build directory
+        shell: pwsh
+        run: |
+          $builds = @(Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'unsigned-*')
+          if ($builds.Count -ne 1) {
+            throw "Expected exactly one unsigned alpha build directory; found $($builds.Count)."
+          }
+          "OWNCONTEXT_BUILD_DIR=$($builds[0].FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Re-verify the source-bound draft release bundle
+        shell: pwsh
+        run: npm run release:bundle:verify -- --build "$env:OWNCONTEXT_BUILD_DIR"
+
+      # An unsigned executable must not become a downloadable artifact merely
+      # because this verification workflow is later copied into a public repo.
+      - name: Retain the private-repository alpha bundle briefly
+        if: ${{ github.event.repository.private == true }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: owncontext-unsigned-alpha-${{ github.sha }}
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            ${{ env.OWNCONTEXT_BUILD_DIR }}/make/squirrel.windows/x64/*
+            ${{ env.OWNCONTEXT_BUILD_DIR }}/evidence/*
+            ${{ env.OWNCONTEXT_BUILD_DIR }}/OwnContext Developer Preview-win32-x64/resources/compliance/*

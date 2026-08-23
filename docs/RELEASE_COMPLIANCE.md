@@ -138,6 +138,40 @@ SBOM/notices, or approve publication.
 The outputs remain unsigned, draft-only, and prohibited from public release
 while the license hold applies.
 
+### Source-bound outer draft bundle
+
+After the full maker smoke passes, `scripts/release-bundle.mjs` writes three
+additional files under the unique build's `evidence` directory:
+
+- `OWNCONTEXT-RELEASE-CANDIDATE.json` binds the exact Setup EXE, `.nupkg`,
+  `RELEASES`, payload compliance evidence, maker provenance, Git commit,
+  tracked-worktree state, copied lockfile, project-license state, and
+  Authenticode inspection result;
+- `OWNCONTEXT-RELEASE-SHA256SUMS` hashes every file named by that outer bundle,
+  excluding the manifest and checksum file themselves to avoid a circular
+  digest; and
+- `SOURCE-package-lock.json` preserves the exact dependency lockfile used for
+  the candidate.
+
+Generation refuses to overwrite an existing bundle, requires the exact
+three-file maker inventory recorded by provenance, and compares each maker file
+by path, size, and SHA-256 before writing. Verification recalculates the entire
+manifest and outer checksum from the current files, source identity, license
+state, and Authenticode result. The manifest stores no local absolute path or
+PowerShell status message. It always records `publicRelease: false` because the
+current build profile, compliance mode, provenance, version, and product naming
+are developer-alpha only. The draft checker does not choose a license: even
+consistent package metadata plus a `LICENSE` file remains
+`declared-not-release-approved` until the project records a separate release
+approval.
+
+`.github/workflows/alpha-ci.yml` runs the locked install, full project check,
+Windows make, and a separate release-bundle verification with repository
+`contents: read` permission only. All referenced actions are pinned to full
+commit SHAs. The workflow contains no release mutation or signing permission;
+it retains the unsigned bundle for three days only when the repository is
+private. This is CI evidence, not a GitHub Release workflow.
+
 The `.nupkg` checks currently consume central-directory semantics through .NET
 and `yauzl`. They do not yet prove that every raw local header matches its
 central record. A strict raw nupkg walker is therefore still required before a

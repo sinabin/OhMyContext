@@ -261,13 +261,17 @@ async function runGuiSmoke(executable, temporaryRoot) {
     await readFile(resolve(temporaryRoot, "renderer-ready.json"), "utf8"),
   );
   if (
-    result.status !== "first-run-sample-search-complete" ||
+    result.status !== "first-run-sample-search-and-connections-preview-complete" ||
     result.nonce !== nonce ||
     result.isPackaged !== true ||
     result.sampleSourceReady !== true ||
     result.sampleSourceLabel !== "OwnContext Sample Library" ||
     result.suggestedQuery !== "weekly review" ||
     result.sampleProvenanceVerified !== true ||
+    result.connectionsScreenReady !== true ||
+    result.codexConnectionCardReady !== true ||
+    result.claudeCodeConnectionCardReady !== true ||
+    result.externalTransferBoundaryVisible !== true ||
     !Number.isInteger(result.resultCardCount) ||
     result.resultCardCount < 1 ||
     result.resultCardCount > 12

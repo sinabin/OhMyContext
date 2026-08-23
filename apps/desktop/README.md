@@ -57,8 +57,9 @@ complete read-only MCP runtime independently of npm workspace links, and then
 uses one validated `OWNCONTEXT_FORGE_BUILD_ID` for the complete release flow. It
 packages the application, generates and verifies draft compliance evidence,
 runs the Squirrel maker against that exact package with `--skip-package`, and
-finally runs the packaged smoke test. Outputs are created under a unique
-`apps/desktop/out/unsigned-*/make` directory.
+finally runs the packaged smoke test. After those checks pass, it generates and
+re-verifies a source-bound draft release bundle. Outputs are created under a
+unique `apps/desktop/out/unsigned-*` directory.
 
 The generated preview has no payment or license-key gate and does not require
 Node.js on the target Windows x64 machine. That technical ability to make and
@@ -75,8 +76,11 @@ inventoried Squirrel/NuGet layer may remain outside that mapping. It then starts
 the packaged executable in Electron's Node-compatible mode with the bundled
 MCP CLI, imports a temporary fixture into a SQLite/FTS vault, searches it, fetches
 the document using the IDs issued by that search, and removes the fixture
-afterward. A separate launch with isolated temporary user data confirms that
-the packaged renderer and preload bridge load in normal GUI mode.
+afterward. A separate launch with isolated temporary user data uses the visible
+GUI controls to import the built-in sample, run the suggested search, confirm a
+sample-provenance result, open AI Connections, and confirm the Codex and Claude
+Code cards plus the external-transfer warning. This preview is read-only: the
+smoke does not connect either client or change its settings.
 
 Central-directory archive names are checked without slash or case normalization, and inspection
 has bounded compressed size, entry count, individual/total uncompressed size,
@@ -100,6 +104,15 @@ packaged application executable. NuGet product XML is either byte-pinned or
 matched to a canonical form with only bounded random identifiers. A
 deterministic draft record is created
 atomically under the build's `evidence` directory.
+
+The same directory also receives `OWNCONTEXT-RELEASE-CANDIDATE.json`,
+`OWNCONTEXT-RELEASE-SHA256SUMS`, and an exact copy of the source
+`package-lock.json`. The candidate manifest binds the Setup EXE, `.nupkg`,
+`RELEASES`, payload compliance files, maker provenance, Git commit, tracked
+worktree state, project-license state, and Windows Authenticode result. It
+deliberately records `publicRelease: false` and explicit blockers. It contains
+no absolute local paths. This outer checksum is additional draft evidence, not
+a public manifest or a signature.
 
 This evidence covers the unpacked application payload and a constrained,
 semantic maker transform from pinned inputs, but it is not bit-for-bit
@@ -130,6 +143,13 @@ for private non-sensitive evaluation only. Do not publicly redistribute them:
 the project license remains undecided. Windows can show Unknown Publisher or
 SmartScreen warnings. This build target does not satisfy the public-release
 security gates below.
+
+`.github/workflows/alpha-ci.yml` repeats the complete check and make chain on a
+Windows runner with read-only repository permission. It has no release or
+attestation permission. The unsigned binary bundle is uploaded only when the
+repository is private and is retained for three days; if the repository is
+public, the workflow verifies the build without publishing its executable as a
+workflow artifact.
 
 The MCP connection deliberately sets `ELECTRON_RUN_AS_NODE=1` for the packaged
 executable because a Windows GUI-subsystem Electron process does not provide a

@@ -36,6 +36,10 @@ export interface GuiSmokeJourneyEvidence {
   readonly suggestedQuery: typeof SAMPLE_LIBRARY_SUGGESTED_QUERY;
   readonly sampleProvenanceVerified: true;
   readonly resultCardCount: number;
+  readonly connectionsScreenReady: true;
+  readonly codexConnectionCardReady: true;
+  readonly claudeCodeConnectionCardReady: true;
+  readonly externalTransferBoundaryVisible: true;
 }
 
 const GUI_JOURNEY_RENDERER_TIMEOUT_MS = 15_000;
@@ -112,7 +116,7 @@ export function writeGuiSmokeSuccess(
   evidence: GuiSmokeJourneyEvidence,
 ): void {
   const payload = {
-    status: "first-run-sample-search-complete",
+    status: "first-run-sample-search-and-connections-preview-complete",
     nonce: context.nonce,
     isPackaged,
     ...validateJourneyEvidence(evidence),
@@ -126,8 +130,8 @@ export function writeGuiSmokeSuccess(
 
 /**
  * Exercises the packaged renderer through the same visible controls a new user
- * sees. It returns content-free evidence only after a built-in sample result is
- * present in the DOM.
+ * sees. It returns content-free evidence only after a built-in sample result and
+ * the read-only AI connection preview are present in the DOM.
  */
 export async function runGuiSmokeJourney(
   renderer: GuiSmokeRenderer,
@@ -162,6 +166,10 @@ function validateJourneyEvidence(value: unknown): GuiSmokeJourneyEvidence {
     evidence.sampleSourceLabel !== SAMPLE_LIBRARY_SOURCE_LABEL ||
     evidence.suggestedQuery !== SAMPLE_LIBRARY_SUGGESTED_QUERY ||
     evidence.sampleProvenanceVerified !== true ||
+    evidence.connectionsScreenReady !== true ||
+    evidence.codexConnectionCardReady !== true ||
+    evidence.claudeCodeConnectionCardReady !== true ||
+    evidence.externalTransferBoundaryVisible !== true ||
     !Number.isInteger(evidence.resultCardCount) ||
     (evidence.resultCardCount as number) < 1 ||
     (evidence.resultCardCount as number) > MAX_GUI_RESULT_CARDS
@@ -175,6 +183,10 @@ function validateJourneyEvidence(value: unknown): GuiSmokeJourneyEvidence {
     suggestedQuery: SAMPLE_LIBRARY_SUGGESTED_QUERY,
     sampleProvenanceVerified: true,
     resultCardCount: evidence.resultCardCount as number,
+    connectionsScreenReady: true,
+    codexConnectionCardReady: true,
+    claudeCodeConnectionCardReady: true,
+    externalTransferBoundaryVisible: true,
   };
 }
 
@@ -259,12 +271,35 @@ function renderGuiJourneyScript(): string {
     return matches.length > 0 ? matches : undefined;
   });
 
+  await waitFor('the AI connections navigation', () =>
+    buttonWithText('nav button', 'AI connections')
+  ).then((button) => button.click());
+
+  const connectionCards = await waitFor('the read-only AI connection preview', () => {
+    const codex = document.querySelector('[aria-label="Codex connection"]');
+    const claudeCode = document.querySelector('[aria-label="Claude Code connection"]');
+    const boundary = document.querySelector('[aria-label="Current data boundary"]');
+    const boundaryText = boundary instanceof HTMLElement ? boundary.innerText : '';
+    if (
+      codex instanceof HTMLElement &&
+      claudeCode instanceof HTMLElement &&
+      boundaryText.includes('returned context may leave')
+    ) {
+      return { codex, claudeCode };
+    }
+    return undefined;
+  });
+
   return {
     sampleSourceReady: true,
     sampleSourceLabel: expectedSourceLabel,
     suggestedQuery: expectedQuery,
     sampleProvenanceVerified: true,
     resultCardCount: sampleCards.length,
+    connectionsScreenReady: true,
+    codexConnectionCardReady: connectionCards.codex instanceof HTMLElement,
+    claudeCodeConnectionCardReady: connectionCards.claudeCode instanceof HTMLElement,
+    externalTransferBoundaryVisible: true,
   };
 })()
 `;

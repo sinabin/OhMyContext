@@ -77,9 +77,12 @@ a Milestone 6 public-release gate.
 Status: in progress — the developer alpha, built-in sample onboarding,
 source-removal flow, reversible Codex configuration, user-scoped Claude Code
 configuration, and an unsigned Windows x64 Squirrel developer-preview installer
-are implemented. A clean-machine install/uninstall exercise, non-developer
-usability evidence, a signed public candidate, and a verified update channel
-remain outstanding.
+are implemented. The packaged GUI smoke now follows the built-in sample through
+search and the read-only AI Connections preview, and a read-only Windows alpha
+workflow verifies a source-bound draft release bundle without creating a public
+release. A clean-machine Setup install/uninstall exercise, actual packaged
+client-connection mutation, non-developer usability evidence, a signed public
+candidate, and a verified update channel remain outstanding.
 
 Deliverables:
 
@@ -152,9 +155,11 @@ Deliverables:
 - Multilingual lexical benchmark and optional local dense retrieval.
 - Encryption for database, indexes, temporary files, and backups.
 - Draft application-payload notices, SPDX SBOM, checksums, and constrained
-  outer-installer transform provenance are implemented; OS keychain integration,
-  signed updates, complete maker-layer license evidence, and parser isolation
-  remain release work.
+  outer-installer transform provenance are implemented. A draft outer bundle
+  now binds the Setup, `.nupkg`, `RELEASES`, compliance evidence, source commit,
+  lockfile, and Authenticode status; it remains explicitly non-public. OS
+  keychain integration, signed updates, complete maker-layer license evidence,
+  and parser isolation remain release work.
 - Keep build hosts isolated while the stable Electron Forge dependency tree has
   unresolved archive/extraction advisories; accept an upgrade only after the
   complete Windows make and smoke matrix passes.

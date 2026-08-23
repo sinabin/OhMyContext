@@ -20,6 +20,7 @@ const forgeCli = resolve(
   "electron-forge.js",
 );
 const complianceCli = resolve(projectRoot, "scripts", "release-compliance.mjs");
+const releaseBundleCli = resolve(projectRoot, "scripts", "release-bundle.mjs");
 const smokeScript = resolve(scriptsDirectory, "smoke-packaged.mjs");
 const makerInputManifest = resolve(
   desktopDirectory,
@@ -166,6 +167,25 @@ await run(
     : "smoke-test packaged MCP, compliance evidence, and maker outputs",
   packageOnly ? [smokeScript] : [smokeScript, "--require-maker"],
 );
+
+if (!packageOnly) {
+  await run("generate source-bound draft release bundle", [
+    releaseBundleCli,
+    "generate",
+    "--build",
+    buildDirectory,
+    "--project-root",
+    projectRoot,
+  ]);
+  await run("verify source-bound draft release bundle", [
+    releaseBundleCli,
+    "verify",
+    "--build",
+    buildDirectory,
+    "--project-root",
+    projectRoot,
+  ]);
+}
 
 process.stdout.write(
   `\nUnsigned developer ${packageOnly ? "package" : "artifacts"} created under ${buildDirectory}\n`,

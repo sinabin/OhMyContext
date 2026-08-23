@@ -15,15 +15,18 @@
     "ensure:electron": "node -e \"require('electron')\"",
     "build": "npm run build --workspace @owncontext/core && npm run build --workspace @owncontext/mcp-server && npm run build --workspace @owncontext/desktop",
     "check": "npm run ensure:electron && npm run build && npm run typecheck && npm test && npm run test:protocol",
-    "test": "npm run build --workspace @owncontext/core && npm test --workspace @owncontext/core && npm test --workspace @owncontext/mcp-server && npm test --workspace @owncontext/desktop && npm run test:compliance",
+    "test": "npm run build --workspace @owncontext/core && npm test --workspace @owncontext/core && npm test --workspace @owncontext/mcp-server && npm test --workspace @owncontext/desktop && npm run test:compliance && npm run test:release-bundle",
     "test:protocol": "npm run test:protocol --workspace @owncontext/mcp-server",
     "test:compliance": "npm run ensure:electron && vitest run test/release-compliance.test.ts",
+    "test:release-bundle": "vitest run test/release-bundle.test.ts test/release-workflow-policy.test.ts",
     "test:watch": "vitest",
     "typecheck": "npm run build --workspace @owncontext/core && npm run typecheck --workspace @owncontext/core && npm run typecheck --workspace @owncontext/mcp-server && npm run typecheck --workspace @owncontext/desktop",
     "compliance:generate": "node scripts/release-compliance.mjs generate",
     "compliance:generate:draft": "node scripts/release-compliance.mjs generate --draft",
     "compliance:verify": "node scripts/release-compliance.mjs verify",
-    "compliance:verify:draft": "node scripts/release-compliance.mjs verify --draft"
+    "compliance:verify:draft": "node scripts/release-compliance.mjs verify --draft",
+    "release:bundle:generate": "node scripts/release-bundle.mjs generate",
+    "release:bundle:verify": "node scripts/release-bundle.mjs verify"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
