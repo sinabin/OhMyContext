@@ -36,11 +36,19 @@ inventory or bytes.
 The separate encrypted-candidate entry point requires an exact 32-byte Buffer,
 keyed open before schema work, exact positive cipher/integrity attestation,
 bounded open modes, close-on-failure behavior, and no plaintext fallback. This
-is a provider-call contract; it does not prove that any current provider keys or
-encrypts a page. None of these contracts keys the real database: SQLite, FTS,
-WAL, temporary state, and whole configuration backups remain plaintext. The
+contract now has a Windows x64 developer implementation using the pinned
+SQLite3 Multiple Ciphers runtime and a journaled `safeStorage` key lifecycle.
+An isolated packaged main-process smoke creates the candidate vault, exercises
+import/search/fetch, closes and reopens it in the same process, and scans its
+database, present sidecars, envelope, and state for one canary in five tested
+encodings. This does not connect the candidate to normal desktop or MCP use and
+does not prove process-restart, crash, power-loss, backup, OS-temp, log, or
+pagefile coverage. Their SQLite, FTS, WAL, temporary state, and whole
+configuration backups remain plaintext. The
 compatibility probe and real open are not atomic against a concurrent external
-writer. The UI continues to
+writer. Independent review also reproduced a post-open WAL hard-link write to
+an external file when another same-user process can concurrently write the
+vault directory. The UI continues to
 report encryption as not implemented, and the public encryption gate remains
 open.
 
@@ -293,7 +301,7 @@ in plaintext.
 | Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability, authenticated packaged-client history, ACL/race-safe recovery, and disclosure tests pass | Codex exact config parsing and Claude Code packaged MCP health are prototype-checked with isolated profiles and zero search/fetch activity; client kind remains unauthenticated, while override-target tracking, DACL preservation, atomic CAS, whole-backup lifecycle, and model/tool integration remain unverified; Claude Desktop Extension planned |
 | Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Source-level logical purge and receipt prototype verified; portable export and complete residue coverage remain designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
-| Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Explicit plaintext-provider boundary, fail-closed keyed candidate contract, and packaged synthetic OS-key envelope prototype verified; no real encrypted provider is shipped and DB/index/WAL/temp/backups remain plaintext |
+| Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Pinned Windows encrypted provider, journaled key lifecycle, and isolated packaged create/reopen/canary smoke are prototype-verified; normal desktop/MCP and backups remain plaintext, and concurrent sidecar, crash/durability, locking, DACL, rotation, and broker gates remain open |
 | Parser process isolation and resource limits | Milestone 6 | Required for every untrusted format | Designed |
 | Signed installers/updates/connectors, authenticated client executables, SBOM, release artifact checks | Milestone 6 | Required | Unsigned developer preview and draft artifact evidence exist; signing and client source/publisher validation remain designed |
 | Cross-vault, injection-impact, deletion, export, and log suites | Milestone 6 | Required with zero unauthorized canary disclosure | Designed |
@@ -368,7 +376,9 @@ Developer prototypes may precede these gates only when clearly labeled, restrict
 `[Verification limitation]` The controls marked Prototype verified have passed only
 in the development workspace on the current Windows machine and deterministic
 fixtures. An unsigned Windows x64 installer exists and has packaged smoke
-coverage. A GitHub-hosted-only install/installed-GUI/MCP/uninstall harness is
+coverage, including the isolated encrypted-candidate reopen path described
+above; this is not a process-restart or normal-product-vault test. A
+GitHub-hosted-only install/installed-GUI/MCP/uninstall harness is
 implemented and statically/adversarially checked, but it has not yet completed
 its first hosted run or a clean consumer-machine exercise. The complete
 adversarial matrix and signed-release validation also remain open. macOS

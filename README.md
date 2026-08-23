@@ -66,27 +66,43 @@ GitHub Release; it uploads unsigned binaries only while the repository is
 private.
 
 The core now requires every caller to select a storage provider explicitly. The
-only shipped provider is visibly identified as `node-sqlite-development` with a
+normal desktop and MCP routes still select `node-sqlite-development` with a
 `plaintext-development` security profile; there is no implicit plaintext
-fallback. A separate encrypted-candidate entry point now requires an exact
+fallback. A separate encrypted-candidate entry point requires an exact
 32-byte `Buffer`, passes it only to a keyed provider open, requires positive
 cipher and integrity attestation before schema access, closes on every
-post-open failure, and never retries through the plaintext provider. This is a
-fail-closed provider contract, not an encrypted implementation. The plaintext
-provider's bounded, read-only compatibility parser checks the database
+post-open failure, and never retries through the plaintext provider. A Windows
+x64 developer candidate now implements that contract with pinned
+`better-sqlite3-multiple-ciphers` 13.0.3 runtime bytes, exact SQLite3 Multiple
+Ciphers 2.4.0 / SQLite 3.53.4 identity, ChaCha20, HMAC checking, and memory-only
+SQLite temporary storage. Its selected 17 runtime files are pinned to hashes
+derived from the exact npm tarball whose SHA-512 matches the lockfile SRI.
+
+The packaged Electron smoke uses asynchronous `safeStorage` to create a new
+key envelope and encrypted vault, imports and retrieves a fixture, closes it,
+reopens the same key and vault identity within the same Electron process,
+retrieves the fixture again, and checks
+that the tested UTF-8/UTF-16/UTF-32 canary encodings are absent from the
+database, present sidecars, envelope, and state journal. This is an isolated
+developer-candidate path, not normal product storage or public security
+approval. The interactive desktop, MCP server, UI status, client-configuration
+backups, and existing alpha vaults remain plaintext. Independent review also
+reproduced a post-open WAL hard-link race when another same-user process can
+write the vault directory; process-restart coverage, forced-termination
+temporary-journal recovery, directory durability, cross-process locking, DACLs,
+rotation, and the planned broker/stdio bridge remain public-release gates.
+
+Separately, the plaintext provider's bounded, read-only compatibility parser
+checks the database
 header and, only when both header mode bytes declare WAL, valid WAL frames
 without opening SQLite. A stable zero-byte WAL created by a live reader is
 treated as having no frames. A mismatched WAL sidecar or rollback journal fails
 closed; a crash-style
 main-plus-WAL fixture from a newer schema is rejected without changing the
-original files. A packaged Windows x64 smoke also verifies a synthetic 32-byte
-key round trip through Electron's asynchronous `safeStorage` API and rejects
-wrappers that leave the tested raw, UTF-8, UTF-16, or UTF-32 key encodings
-directly recoverable from the envelope. This is key-management foundation
-evidence only: the real SQLite database, FTS index, WAL, temporary state, and
-configuration backups are still plaintext, arbitrary reversible wrappers and
-DPAPI identity are not independently excluded, and the probe/open boundary is
-not yet atomic against an external writer.
+original files. A separate key-only packaged smoke still rejects wrappers that
+leave tested raw, UTF-8, UTF-16, or UTF-32 key encodings directly recoverable
+from the envelope. Neither smoke independently proves DPAPI identity or closes
+the compatibility probe/open race against an external writer.
 
 ## Implementation status
 
@@ -96,7 +112,7 @@ not yet atomic against an external writer.
 | Atomic local SQLite/FTS vault | Implemented and prototype-tested |
 | Read-only local stdio MCP | Implemented and real-protocol tested |
 | Desktop import, sample onboarding, search, source removal, access history, and Codex/Claude Code config | Developer alpha |
-| Explicit storage-provider boundary and synthetic Windows key envelope | Prototype-verified; real vault remains plaintext |
+| Encrypted provider, pinned Windows runtime, key lifecycle, and packaged reopen/canary smoke | Developer candidate verified in isolation; normal desktop/MCP vault remains plaintext |
 | Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
 
 Each desktop-managed MCP launch is currently pinned to the single `default`

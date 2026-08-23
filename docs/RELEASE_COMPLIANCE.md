@@ -175,6 +175,20 @@ attest DPAPI, exclude arbitrary reversible wrappers, or establish encryption of 
 SQLite/FTS/WAL/temp/backup surface and does not remove any public security
 blocker.
 
+The same packaged smoke command also verifies the separately staged Windows x64
+encrypted-SQLite developer runtime before a normal Electron main-process path
+loads it by explicit resource location. The selected 17 files must match fixed
+length/SHA-256 pins derived from the exact npm 13.0.3 tarball whose SHA-512
+matches the lockfile SRI. The process then creates, imports, searches, fetches,
+closes, and reopens an isolated encrypted candidate through async `safeStorage`,
+and checks one fixture canary in five encodings across the database, present
+sidecars, envelope, and state. Its bounded transient result explicitly does not
+prove normal desktop/MCP integration, complete plaintext absence, wider
+OS/log/backup surfaces, process restart/crash/power-loss recovery, or
+same-user concurrent-directory tamper resistance. It is not yet added to the
+outer release-bundle evidence inventory; the successful command and package
+contents are developer evidence only.
+
 Generation refuses to overwrite an existing bundle, requires the exact
 three-file maker inventory recorded by provenance, and compares each maker file
 by path, size, and SHA-256 before writing. Maker provenance itself is parsed,

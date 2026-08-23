@@ -2,13 +2,14 @@
 
 Last updated: 2026-08-24
 
-Status: **Foundation prototype verified; vault encryption not implemented**
+Status: **Isolated encrypted-vault candidate verified; normal product vault encryption not implemented**
 
 This document records the encryption architecture selected for the Windows-first
 OwnContext release. It is an implementation contract and spike plan, not a
-security claim. The current developer preview must continue to say that its
-vault is plaintext and suitable only for non-sensitive fixtures until every
-acceptance test in this document passes on the packaged application.
+security claim. The current interactive developer preview and MCP route must
+continue to say that their vault is plaintext and suitable only for
+non-sensitive fixtures until every acceptance test in this document passes on
+the packaged application.
 
 macOS support, numeric minimum/recommended hardware specifications, the project
 license, and the final encrypted-SQLite provider are deliberately not decided
@@ -80,15 +81,15 @@ Windows development runtime:
   Electron also documents `safeStorage` as a **main-process** API. Therefore the
   present packaged MCP process is not an acceptable key broker.
 
-These observations prove only the current boundary: plaintext is possible and
-application-level encryption is absent. They do not show that content can be
+These observations prove only the normal desktop/MCP boundary: plaintext is
+possible and application-level encryption is absent from those routes. They do not show that content can be
 securely erased from SSD media, nor that adding a cipher to the main `.sqlite`
 file would automatically protect every auxiliary artifact.
 
-## Implemented foundation evidence
+## Implemented foundation and candidate evidence
 
-The first implementation slice deliberately remains separate from the real
-vault:
+The encrypted implementation slice deliberately remains separate from the
+normal product vault:
 
 - `packages/core/src/storage.ts` defines the connection/provider contract and
   rejects missing or internally inconsistent security metadata before it
@@ -102,8 +103,25 @@ vault:
   exact positive cipher/integrity attestation, and supports only
   `open-existing` or `create-exclusive`. A keyless caller is rejected, every
   post-open failure closes the candidate session, errors are content-free, and
-  there is no plaintext fallback. These tests verify the adapter contract; no
-  shipped provider yet demonstrates page encryption or key-before-page access.
+  there is no plaintext fallback.
+- `apps/desktop/src/electron/encrypted-sqlite-provider.ts` implements a Windows
+  x64 developer candidate with `better-sqlite3-multiple-ciphers` 13.0.3. It
+  applies the key before page/schema inspection, forces SQLite temp storage to
+  memory, and requires exact SQLite3 Multiple Ciphers 2.4.0 / SQLite 3.53.4,
+  ChaCha20, and HMAC state before `user_version`. Wrong-key, authenticated-page
+  tamper, WAL reopen, FTS, and tested main/WAL/SHM plaintext-canary cases run
+  against the real native module.
+- Independent review reproduced a post-key race in which another same-user
+  process with write access to the vault directory creates a WAL hard link to
+  an external file before SQLite opens the sidecar; a later insert modifies the
+  external file. The current path checks reject persistent links but cannot make
+  SQLite's later sidecar open handle-relative. This is a public-release blocker,
+  not a property waived by the packaged happy-path smoke.
+- Packaging stages only 17 allowlisted runtime files. Their lengths and
+  SHA-256 hashes are pinned to the exact npm 13.0.3 tarball after its computed
+  SHA-512 matched the lockfile SRI. This proves those selected registry-tarball
+  bytes, not a source rebuild, Authenticode signature, unselected package files,
+  bundled-library license compatibility, or the OwnContext project license.
 - The plaintext provider inspects the 100-byte database header and, only when
   both header mode bytes declare WAL, checksum-valid WAL frames through
   read-only file descriptors before it opens SQLite. It caps WAL inspection at
@@ -118,6 +136,13 @@ vault:
   Electron `safeStorage` contract, exclusive same-directory publication,
   callback-scoped key access, best-effort Buffer zeroization, content-free
   errors, and reports `shouldReEncrypt` without silently rewriting the file.
+- `apps/desktop/src/electron/vault-key-manager.ts` journals fresh creation,
+  binds state, envelope key ID, path/device/inode-derived vault ID, generation,
+  and an encrypted internal identity row, and fails closed on inconsistent
+  inventories. It covers tested state-only, envelope-only, pre-identity, and
+  post-identity reopen points; directory-metadata durability, orphaned publish
+  temporaries after forced termination, and a cross-process lifecycle lock are
+  not yet proven.
 - The dedicated `--owncontext-key-storage-smoke` path runs only in the packaged
   Electron main process with a new OS-temporary profile. On Windows x64,
   `npm run package:win --workspace @owncontext/desktop` completed the wrap,
@@ -134,11 +159,22 @@ vault:
   and hashes one bounded read of that file, so schema validation and the
   recorded digest cannot observe different file generations. The evidence
   explicitly says it does not cover the real SQLite vault or public release.
+- The dedicated packaged encrypted-vault smoke loads the separately staged
+  native runtime by its explicit resource path. In one normal Electron main
+  process it creates a fresh candidate through async `safeStorage`, imports,
+  searches, fetches, closes, reopens the same vault/key identity, searches and
+  fetches again, and scans the main DB, present WAL/SHM/journal, envelope, and
+  state for one fixture canary in UTF-8, UTF-16LE/BE, and UTF-32LE/BE. Its exact
+  evidence says that it does not prove normal desktop/MCP integration, complete
+  plaintext absence, log/userData/OS-temp/pagefile/backup coverage, process
+  restart/crash/power-loss recovery, or resistance to concurrent same-user
+  vault-directory tampering.
 
-This slice demonstrates that the selected OS-key API and envelope state machine
-can execute in the packaged Windows main process. It does not encrypt SQLite,
-FTS, WAL, temporary files, client-configuration backups, or migration state;
-the desktop UI therefore continues to report encryption as not implemented.
+This slice demonstrates that the OS-key API, encrypted provider candidate, and
+key lifecycle can execute together in the packaged Windows main process. It
+does not switch the normal desktop or MCP storage route, encrypt client
+configuration backups, or complete migration/rotation/lock behavior; the UI
+therefore continues to report encryption as not implemented.
 
 Primary references:
 
@@ -372,7 +408,7 @@ a permanent support claim.
 | --- | --- | --- | --- |
 | SQLCipher Community source + minimal OwnContext N-API adapter | Strongest control over a raw-byte key API, pinned cipher settings, FTS5 compile flags, and Windows artifacts | Reproducible Windows x64/Electron build; `sqlite3_key_v2`; cipher status/integrity; FTS/WAL parity; complete transitive license/SBOM review | Highest native maintenance and patch burden; adoption waits for license and update-operations review |
 | Official SQLCipher Windows distribution behind the same adapter | Vendor-maintained cipher implementation and documented APIs may reduce crypto build risk | Exact redistribution terms/cost; offline reproducible packaging or vendor provenance; Electron-compatible adapter; all acceptance tests | A paid or redistribution-restricted artifact may conflict with a universally free open-source distribution; maintainer decision required |
-| `better-sqlite3-multiple-ciphers` | Fast Windows proof of the storage interface and native packaging path | Exact Electron 43 x64 load/rebuild; selected cipher provenance/settings; binary key handling; FTS/WAL/temp tests; fork and bundled-library license/SBOM audit | Third-party fork and multiple cipher modes increase configuration/downgrade risk; no adoption solely because a prebuild exists |
+| `better-sqlite3-multiple-ciphers` 13.0.3 | Implemented Windows developer candidate for the storage interface and native packaging path | Exact Electron 43 x64 load, selected-file registry hash pins, key-before-page and exact engine/cipher state, FTS/WAL/temp and packaged reopen smoke are verified; source-rebuild equivalence, sidecar-race resolution, full bundled-library license/SBOM review, maintenance and update policy remain | Third-party fork and multiple cipher modes increase configuration/downgrade risk; the implemented spike is not final provider adoption or public approval |
 | `@journeyapps/sqlcipher` | Useful API/reference comparison with an Electron rebuild path | Upstream-supported Windows x64 build and packaged tests | Upstream currently states Windows is unsupported; reject for the Windows-first release unless that boundary changes and is verified |
 | Current `node:sqlite` | Baseline for behavior and performance comparisons | Existing functional suite and representative import/search benchmark | No application-level page-encryption provider in the current code path; cannot be the release storage backend |
 
@@ -483,10 +519,13 @@ captured from a packaged Windows x64 release candidate, not only unit tests.
 1. Introduce storage and key-provider interfaces with the existing plaintext
    backend retained only for tests/developer fixtures and visibly labeled.
    **Prototype verified.** The fail-closed keyed candidate contract and packaged
-   synthetic safeStorage envelope are also verified, but neither supplies a
-   real encrypted database provider or connects OS key unwrapping to the vault.
+   synthetic safeStorage envelope are also verified. The implemented Windows
+   provider/key-manager path now connects them for an isolated packaged smoke,
+   but not for normal desktop or MCP storage.
 2. Run the Windows encrypted-provider and named-pipe spikes; record exact version,
-   build, license, performance, and adversarial evidence.
+   build, license, performance, and adversarial evidence. **Encrypted-provider
+   developer spike partially verified; sidecar race and remaining provenance,
+   licensing, performance, and operations gates are open. Named pipe pending.**
 3. Implement the broker/bridge split and make direct MCP database opening an
    impossible packaged-code path.
 4. Implement new encrypted vault creation, lock/unlock, rotation recovery, and
@@ -494,8 +533,9 @@ captured from a packaged Windows x64 release candidate, not only unit tests.
 5. Run the complete packaged matrix plus the wider security/release gates in
    `SECURITY_MODEL.md` and `RELEASE_COMPLIANCE.md`.
 
-Until step 5 passes, the only accurate product status is **key-management
-foundation verified; vault encryption not implemented**. This work does not
+Until step 5 passes, the accurate product status is **packaged encrypted-vault
+developer candidate verified in isolation; normal product vault encryption not
+implemented**. This work does not
 unblock public sensitive-data claims, public binary distribution, or a signed
 update channel by itself.
 
@@ -503,9 +543,11 @@ update channel by itself.
 
 The topology, ownership boundary, key hierarchy, migration posture, storage
 interface, and isolated safeStorage envelope behavior are selected. The exact
-native encrypted-SQLite provider and Win32 pipe helper are `[verification
-limitation]` items because no candidate has yet passed the packaged Windows
-spike, dependency-license review, cipher/integrity tests, and native
-supply-chain audit. This does not block continued local development with
-synthetic non-sensitive fixtures. It blocks implementation claims and any
-public statement that OwnContext protects personal vault data at rest.
+final encrypted-SQLite provider and Win32 pipe helper remain `[verification
+limitation]` items. The 13.0.3 candidate has passed a bounded packaged Windows
+functional/cipher/reopen spike and selected-file registry hash checks, but it
+has not passed the reproduced sidecar-race gate, full dependency-license and
+source-build review, normal-route broker integration, or the complete at-rest
+matrix. This does not block continued local development with synthetic
+non-sensitive fixtures. It blocks release-complete implementation claims and
+any public statement that OwnContext protects personal vault data at rest.

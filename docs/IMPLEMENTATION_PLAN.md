@@ -193,13 +193,23 @@ Deliverables:
   separate keyed encrypted-candidate open contract now requires a real 32-byte
   `Buffer`, keyed open before schema work, positive exact cipher/integrity
   attestation, exclusive-create or existing-open mode, failure cleanup, and no
-  plaintext retry. No native encrypted provider implements that contract yet. A
+  plaintext retry. A Windows x64 developer candidate implements the contract
+  with the exact pinned `better-sqlite3-multiple-ciphers` 13.0.3 runtime and a
+  journaled `safeStorage` key lifecycle. A packaged main-process smoke creates,
+  imports, searches, fetches, closes, and reopens that isolated vault in the
+  same Electron process, then finds none of one fixture canary's tested
+  UTF-8/UTF-16/UTF-32 encodings in its
+  database, present sidecars, envelope, or state. It does not switch the normal
+  desktop or MCP routes and is not public encryption approval. A
   bounded read-only header/WAL parser requires matching WAL mode, preserves a
   stopped future-schema main/WAL fixture exactly, and the key smoke rejects byte
-  and UTF-16 plaintext no-op wrappers. The real DB/FTS/WAL/backups are still
-  plaintext; atomic
-  probe/open under an external writer, independent DPAPI evidence, native
-  encrypted storage, broker/bridge isolation, signed updates, complete
+  and UTF-16 plaintext no-op wrappers. The normal desktop/MCP
+  DB/FTS/WAL/backups are still plaintext. A reproduced post-open WAL hard-link
+  race under a concurrent same-user vault-directory writer, process-restart
+  coverage, process-crash temporary artifacts,
+  directory durability, cross-process locking, DACLs, rotation, and atomic
+  probe/open under an external writer, independent DPAPI evidence,
+  broker/bridge integration, signed updates, complete
   maker-layer license evidence, and parser isolation remain release work.
 - Keep build hosts isolated while the stable Electron Forge dependency tree has
   unresolved archive/extraction advisories; accept an upgrade only after the
