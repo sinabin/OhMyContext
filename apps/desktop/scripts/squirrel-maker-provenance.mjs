@@ -58,8 +58,8 @@ const PINNED_NUGET_METADATA = new Map([
     sha256: "b04dac1774db65f09fa0d85ed42cf8406390a2b20a75253368294e9d1346db23",
   }],
   ["[Content_Types].xml", {
-    length: 1_383,
-    sha256: "d93df825279ed82e3896bb2ec67c503b7febe066e2821e22806d9e839222fbd9",
+    length: 1_622,
+    sha256: "5f2b461b10b1ad19ebb1679fbded61a87a239eed2523390054138df0832e5c4d",
   }],
 ]);
 const PINNED_NUGET_CORE_PROPERTIES = {
@@ -86,6 +86,30 @@ function comparePaths(left, right) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function verifyPinnedNugetProductMetadata(name, bytes) {
+  const expected = PINNED_NUGET_METADATA.get(name);
+  let normalized;
+  try {
+    normalized = bytes === undefined ? undefined : Buffer.from(bytes);
+  } catch {
+    normalized = undefined;
+  }
+  if (
+    !expected ||
+    !normalized ||
+    normalized.length !== expected.length ||
+    sha256(normalized) !== expected.sha256
+  ) {
+    throw new Error(`Squirrel NuGet metadata differs from the pinned product transform: ${name}`);
+  }
+  return {
+    name,
+    length: normalized.length,
+    sha256: expected.sha256,
+    transform: "pinned-bytes",
+  };
 }
 
 function updateCrc32(state, bytes) {
@@ -1433,16 +1457,8 @@ function verifyExecutionStubResources(stubBytes, applicationBytes) {
 
 function verifyNugetMetadata(found, coreName) {
   const evidence = [];
-  for (const [name, expected] of PINNED_NUGET_METADATA) {
-    const bytes = found.get(name);
-    if (
-      !bytes ||
-      bytes.length !== expected.length ||
-      sha256(bytes) !== expected.sha256
-    ) {
-      throw new Error(`Squirrel NuGet metadata differs from the pinned product transform: ${name}`);
-    }
-    evidence.push({ name, length: bytes.length, sha256: expected.sha256, transform: "pinned-bytes" });
+  for (const name of PINNED_NUGET_METADATA.keys()) {
+    evidence.push(verifyPinnedNugetProductMetadata(name, found.get(name)));
   }
   const coreBytes = found.get(coreName);
   if (

@@ -11,6 +11,7 @@ import {
   verifyDeflateEntryFullyConsumed,
   verifyInvariantPeOrigin,
   verifyPackageTreeInventory,
+  verifyPinnedNugetProductMetadata,
   verifyPinnedSquirrelMakerInputs,
   verifySetupArchiveInventory,
   verifyStrictSetupZipContainer,
@@ -27,6 +28,32 @@ const manifestPath = resolve(desktopDirectory, "packaging", "squirrel-maker-inpu
 const setupPath = resolve(electronWinstallerDirectory, "vendor", "Setup.exe");
 const fullPackageName = "OwnContextDeveloperPreview-0.0.0-full.nupkg";
 const temporaryRoots: string[] = [];
+const currentContentTypesXml = [
+  "\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+  "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
+  "  <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\" />",
+  "  <Default Extension=\"nuspec\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"pak\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"asar\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"txt\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"json\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"js\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"node\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"mjs\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"bin\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"dll\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"dat\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"exe\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"html\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"psmdcp\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\" />",
+  "  <Override PartName=\"/lib/net45/resources/encrypted-sqlite-runtime/LICENSE\" ContentType=\"application/octet\" />",
+  "  <Override PartName=\"/lib/net45/LICENSE\" ContentType=\"application/octet\" />",
+  "  <Override PartName=\"/lib/net45/version\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"diff\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"bsdiff\" ContentType=\"application/octet\" />",
+  "  <Default Extension=\"shasum\" ContentType=\"text/plain\" />",
+  "</Types>",
+].join("\r\n");
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((path) =>
@@ -62,6 +89,39 @@ describe("Squirrel maker provenance", () => {
       "executionStub",
       "installSpinner",
     ]);
+  });
+
+  it("pins the encrypted-runtime NuGet content types as exact bytes", () => {
+    const current = Buffer.from(currentContentTypesXml, "utf8");
+    expect(current).toHaveLength(1_622);
+    expect(createHash("sha256").update(current).digest("hex"))
+      .toBe("5f2b461b10b1ad19ebb1679fbded61a87a239eed2523390054138df0832e5c4d");
+    expect(verifyPinnedNugetProductMetadata("[Content_Types].xml", current)).toEqual({
+      name: "[Content_Types].xml",
+      length: 1_622,
+      sha256: "5f2b461b10b1ad19ebb1679fbded61a87a239eed2523390054138df0832e5c4d",
+      transform: "pinned-bytes",
+    });
+
+    const previous = Buffer.from(currentContentTypesXml
+      .replace("  <Default Extension=\"js\" ContentType=\"application/octet\" />\r\n", "")
+      .replace("  <Default Extension=\"node\" ContentType=\"application/octet\" />\r\n", "")
+      .replace(
+        "  <Override PartName=\"/lib/net45/resources/encrypted-sqlite-runtime/LICENSE\" ContentType=\"application/octet\" />\r\n",
+        "",
+      ), "utf8");
+    expect(previous).toHaveLength(1_383);
+    expect(createHash("sha256").update(previous).digest("hex"))
+      .toBe("d93df825279ed82e3896bb2ec67c503b7febe066e2821e22806d9e839222fbd9");
+    expect(() => verifyPinnedNugetProductMetadata("[Content_Types].xml", previous))
+      .toThrow(/differs from the pinned product transform/u);
+
+    const mutated = Buffer.from(current);
+    const mutationOffset = mutated.indexOf(Buffer.from("Extension=\"node\"", "utf8"));
+    expect(mutationOffset).toBeGreaterThan(-1);
+    mutated[mutationOffset] = (mutated[mutationOffset] ?? 0) ^ 1;
+    expect(() => verifyPinnedNugetProductMetadata("[Content_Types].xml", mutated))
+      .toThrow(/differs from the pinned product transform/u);
   });
 
   it("fails closed when a pinned input hash is altered", async () => {

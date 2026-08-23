@@ -150,6 +150,16 @@ export function verifyPackageTreeInventory(
   expected: PackageTreeEvidence,
 ): PackageTreeEvidence;
 
+export function verifyPinnedNugetProductMetadata(
+  name: string,
+  bytes: ArrayBuffer | ArrayBufferView,
+): {
+  name: string;
+  length: number;
+  sha256: string;
+  transform: "pinned-bytes";
+};
+
 export function verifyInvariantPeOrigin(
   actualBytes: ArrayBuffer | ArrayBufferView,
   approvedBytes: ArrayBuffer | ArrayBufferView,
