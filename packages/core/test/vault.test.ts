@@ -9,10 +9,12 @@ import {
   deterministicId,
   fetchDocument,
   importDirectory,
+  listSources,
   openVault,
   purgeDocument,
   searchVault,
   type Vault,
+  type ImportProgress,
 } from "../src/index.js";
 
 const temporaryPaths: string[] = [];
@@ -90,6 +92,41 @@ describe("vault ingestion and retrieval", () => {
       "sources", "documents", "revisions", "chunks", "chunks_fts", "retrieval_events",
     ]));
     db.close();
+  });
+
+  it("lists content-free source health and document counts", async () => {
+    const { root, dbPath, vault } = await fixture();
+    await writeFile(join(root, "one.md"), "first source document", "utf8");
+    await writeFile(join(root, "two.txt"), "second source document", "utf8");
+    const imported = await importDirectory(vault, root, {
+      collection: "personal",
+      sourceName: "Personal notes",
+    });
+
+    expect(listSources(vault)).toEqual([
+      expect.objectContaining({
+        sourceId: imported.sourceId,
+        name: "Personal notes",
+        rootUri: imported.rootUri,
+        collection: "personal",
+        status: "ready",
+        documentCount: 2,
+      }),
+    ]);
+    const ready = listSources(vault)[0];
+    expect(ready?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(ready?.lastScannedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(ready).not.toHaveProperty("content");
+
+    const setup = new DatabaseSync(dbPath);
+    setup.prepare("UPDATE sources SET last_scanned_at = NULL WHERE id = ?")
+      .run(imported.sourceId);
+    setup.close();
+    expect(listSources(vault)[0]).toMatchObject({
+      status: "incomplete",
+      lastScannedAt: null,
+      documentCount: 2,
+    });
   });
 
   it("is idempotent and creates a new current revision after modification", async () => {
@@ -302,6 +339,62 @@ describe("vault ingestion and retrieval", () => {
     };
     expect(Number(sources.count)).toBe(0);
     expect(Number(documents.count)).toBe(0);
+    db.close();
+  });
+
+  it("reports bounded progress and atomically rolls back when aborted", async () => {
+    const { root, dbPath, vault } = await fixture();
+    await writeFile(join(root, "a.md"), "abortable first document", "utf8");
+    await writeFile(join(root, "b.md"), "abortable second document", "utf8");
+    const controller = new AbortController();
+    const events: ImportProgress[] = [];
+
+    await expect(importDirectory(vault, root, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        events.push(progress);
+        if (progress.phase === "importing" && progress.processed === 1) {
+          controller.abort();
+        }
+      },
+    })).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(events.some((event) => event.phase === "discovering")).toBe(true);
+    expect(events.some((event) => event.phase === "importing" && event.processed === 1))
+      .toBe(true);
+    for (const event of events) {
+      expect(Object.keys(event).sort()).toEqual([
+        "imported",
+        "phase",
+        "processed",
+        "skipped",
+        "total",
+        "unchanged",
+        "updated",
+      ]);
+    }
+
+    const rootUri = pathToFileURL(root.endsWith(sep) ? root : `${root}${sep}`).href;
+    const sourceId = deterministicId("source", "folder", rootUri, "default");
+    const partialDocumentId = deterministicId("document", sourceId, "a.md");
+    expect(searchVault(vault, { query: "abortable" })).toEqual([]);
+    expect(fetchDocument(vault, { documentId: partialDocumentId })).toBeNull();
+    expect(listSources(vault)).toEqual([]);
+
+    vault.close();
+    openVaults.splice(openVaults.indexOf(vault), 1);
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    const counts = db.prepare(`
+      SELECT
+        (SELECT count(*) FROM sources) AS sources,
+        (SELECT count(*) FROM documents) AS documents,
+        (SELECT count(*) FROM revisions) AS revisions,
+        (SELECT count(*) FROM chunks) AS chunks
+    `).get() as Record<string, number>;
+    expect(Number(counts.sources)).toBe(0);
+    expect(Number(counts.documents)).toBe(0);
+    expect(Number(counts.revisions)).toBe(0);
+    expect(Number(counts.chunks)).toBe(0);
     db.close();
   });
 

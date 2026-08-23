@@ -38,13 +38,26 @@ Claude, Codex, or another authorized client
 
 Owns the domain model, SQLite schema, deterministic identities, ingestion, revision lineage, search, fetch, purge, and portable export contracts. It has no Electron or MCP dependency.
 
+The current folder importer processes one bounded file at a time inside one outer
+SQLite transaction. Cancellation or a failure rolls the whole import back, while
+a failed refresh leaves the previous complete snapshot visible.
+
 ### `apps/mcp-server`
 
 Provides a thin local stdio adapter. It exposes only stable product-level operations rather than database or filesystem primitives. The initial surface is `search` and `fetch`.
 
+Each server instance keeps a bounded cache of document and chunk IDs issued by a
+successful search. `fetch` denies IDs that were not issued on that connection,
+then rechecks the current vault state in the core.
+
 ### `apps/desktop`
 
 Provides end-user onboarding, folder selection, source health, local search, privacy controls, and AI-client configuration. It calls the core through a narrow application service boundary so the desktop shell can be replaced.
+
+The sandboxed renderer receives narrow IPC methods only. Codex configuration is
+read and changed in the main process; the renderer sees the proposed managed
+block and status, never the rest of the user's configuration. Existing files are
+backed up before replacement, and disconnect removes only the marked block.
 
 ### `packages/connector-sdk`
 

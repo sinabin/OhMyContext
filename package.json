@@ -12,11 +12,12 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "check": "npm run typecheck && npm test",
-    "test": "vitest run",
+    "build": "npm run build --workspace @owncontext/core && npm run build --workspace @owncontext/mcp-server && npm run build --workspace @owncontext/desktop",
+    "check": "npm run build && npm run typecheck && npm test && npm run test:protocol",
+    "test": "npm run build --workspace @owncontext/core && npm test --workspace @owncontext/core && npm test --workspace @owncontext/mcp-server && npm test --workspace @owncontext/desktop",
+    "test:protocol": "npm run test:protocol --workspace @owncontext/mcp-server",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run build --workspace @owncontext/core && npm run typecheck --workspace @owncontext/core && npm run typecheck --workspace @owncontext/mcp-server && npm run typecheck --workspace @owncontext/desktop"
   },
   "devDependencies": {
     "@types/node": "^22.17.0",

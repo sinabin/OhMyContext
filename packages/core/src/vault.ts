@@ -17,12 +17,14 @@ import type {
   FetchedChunk,
   ImportDirectoryOptions,
   ImportDirectoryResult,
+  ImportProgress,
   ImportIssue,
   ImportedDocument,
   SearchVaultInput,
   Vault,
   VaultFetchResult,
   VaultSearchResult,
+  VaultSource,
 } from "./types.js";
 
 const DEFAULT_COLLECTION = "default";
@@ -87,6 +89,21 @@ interface FetchRow {
   modified_at: string;
 }
 
+interface SourceRow {
+  id: string;
+  display_name: string;
+  root_uri: string;
+  collection: string;
+  created_at: string;
+  last_scanned_at: string | null;
+  document_count: number | bigint;
+}
+
+interface DiscoveredFiles {
+  files: CandidateFile[];
+  visited: number;
+}
+
 const states = new WeakMap<Vault, VaultState>();
 
 class VaultHandle implements Vault {
@@ -130,6 +147,7 @@ export async function importDirectory(
 ): Promise<ImportDirectoryResult> {
   const state = stateFor(vault);
   const db = state.db;
+  throwIfAborted(options.signal);
   const collection = boundedText(options.collection ?? DEFAULT_COLLECTION, "collection", 128);
   const maxFileBytes = boundedInteger(
     options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
@@ -171,6 +189,22 @@ export async function importDirectory(
       let updated = 0;
       let unchanged = 0;
 
+      const progress = (
+        phase: ImportProgress["phase"],
+        processed: number,
+        total: number | null,
+      ): void => {
+        reportProgress(options, {
+          phase,
+          processed,
+          total,
+          imported,
+          updated,
+          unchanged,
+          skipped: issues.length,
+        });
+      };
+
       // Incompleteness is visible to reads on this connection. Other database
       // connections continue seeing the last committed snapshot until COMMIT.
       db.prepare(`
@@ -182,20 +216,44 @@ export async function importDirectory(
           last_scanned_at = NULL
       `).run(sourceId, rootUri, collection, sourceName, startedAt);
 
-      const candidates = await discoverFiles(root, maxFiles, issues);
+      progress("discovering", 0, null);
+      const discovery = await discoverFiles(
+        root,
+        maxFiles,
+        issues,
+        options.signal,
+        (processed) => progress("discovering", processed, null),
+      );
+      const candidates = discovery.files;
+      progress("discovering", discovery.visited, discovery.visited);
       const seenRelativePaths = new Set<string>();
+      let processed = 0;
+      progress("importing", processed, candidates.length);
       for (const candidate of candidates) {
+        throwIfAborted(options.signal);
         if (seenRelativePaths.has(candidate.relativePath)) {
           issues.push({
             code: "read-error",
             path: candidate.relativePath,
             message: "Another file has the same normalized relative path",
           });
+          processed += 1;
+          progress("importing", processed, candidates.length);
           continue;
         }
         seenRelativePaths.add(candidate.relativePath);
-        const file = await prepareFile(root, candidate, maxFileBytes, issues);
-        if (!file) continue;
+        const file = await prepareFile(
+          root,
+          candidate,
+          maxFileBytes,
+          issues,
+          options.signal,
+        );
+        if (!file) {
+          processed += 1;
+          progress("importing", processed, candidates.length);
+          continue;
+        }
 
         const importedDocument = importPreparedFile(
           db,
@@ -208,10 +266,15 @@ export async function importDirectory(
         if (importedDocument.status === "created") imported += 1;
         else if (importedDocument.status === "updated") updated += 1;
         else unchanged += 1;
+        processed += 1;
+        progress("importing", processed, candidates.length);
       }
 
+      progress("finalizing", processed, candidates.length);
+      throwIfAborted(options.signal);
       db.prepare("UPDATE sources SET last_scanned_at = ? WHERE id = ?")
         .run(new Date().toISOString(), sourceId);
+      throwIfAborted(options.signal);
 
       return {
         sourceId,
@@ -225,10 +288,38 @@ export async function importDirectory(
         documents,
         issues,
       };
-    });
+    }, options.signal);
   } finally {
     state.importingSources.delete(sourceId);
   }
+}
+
+export function listSources(vault: Vault): VaultSource[] {
+  const rows = databaseFor(vault).prepare(`
+    SELECT
+      s.id,
+      s.display_name,
+      s.root_uri,
+      s.collection,
+      s.created_at,
+      s.last_scanned_at,
+      count(d.id) AS document_count
+    FROM sources s
+    LEFT JOIN documents d ON d.source_id = s.id
+    GROUP BY s.id
+    ORDER BY s.display_name COLLATE NOCASE, s.id
+  `).all() as unknown as SourceRow[];
+
+  return rows.map((row) => ({
+    sourceId: row.id,
+    name: row.display_name,
+    rootUri: row.root_uri,
+    collection: row.collection,
+    createdAt: row.created_at,
+    lastScannedAt: row.last_scanned_at,
+    status: row.last_scanned_at === null ? "incomplete" : "ready",
+    documentCount: Number(row.document_count),
+  }));
 }
 
 export function searchVault(vault: Vault, input: SearchVaultInput): VaultSearchResult[] {
@@ -535,10 +626,14 @@ async function discoverFiles(
   root: string,
   maxFiles: number,
   issues: ImportIssue[],
-): Promise<CandidateFile[]> {
+  signal: AbortSignal | undefined,
+  onVisited: (processed: number) => void,
+): Promise<DiscoveredFiles> {
   const directories = [root];
   const files: CandidateFile[] = [];
+  let visited = 0;
   while (directories.length > 0) {
+    throwIfAborted(signal);
     const directory = directories.pop();
     if (!directory) continue;
     const entries = [];
@@ -547,6 +642,10 @@ async function discoverFiles(
     entries.sort((left, right) => compareNames(left.name, right.name));
 
     for (const entry of entries) {
+      throwIfAborted(signal);
+      visited += 1;
+      onVisited(visited);
+      throwIfAborted(signal);
       const absolutePath = resolve(directory, entry.name);
       const displayPath = normalizeRelative(root, absolutePath);
       let info;
@@ -596,7 +695,7 @@ async function discoverFiles(
     }
   }
   files.sort((left, right) => compareNames(left.relativePath, right.relativePath));
-  return files;
+  return { files, visited };
 }
 
 async function prepareFile(
@@ -604,14 +703,18 @@ async function prepareFile(
   candidate: CandidateFile,
   maxFileBytes: number,
   issues: ImportIssue[],
+  signal: AbortSignal | undefined,
 ): Promise<PreparedFile | null> {
   let fileHandle;
   try {
+    throwIfAborted(signal);
     const noFollow = "O_NOFOLLOW" in constants
       ? (constants as typeof constants & { O_NOFOLLOW: number }).O_NOFOLLOW
       : 0;
     fileHandle = await open(candidate.absolutePath, constants.O_RDONLY | noFollow);
+    throwIfAborted(signal);
     const info = await fileHandle.stat();
+    throwIfAborted(signal);
     if (!info.isFile()) {
       issues.push({
         code: "read-error",
@@ -636,7 +739,9 @@ async function prepareFile(
       });
       return null;
     }
+    throwIfAborted(signal);
     const buffer = await fileHandle.readFile();
+    throwIfAborted(signal);
     if (buffer.byteLength > maxFileBytes) {
       issues.push({
         code: "too-large",
@@ -725,16 +830,32 @@ let nextSavepointId = 1;
 async function transactionAsync<T>(
   db: DatabaseSync,
   operation: () => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
+  throwIfAborted(signal);
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = await operation();
+    throwIfAborted(signal);
     db.exec("COMMIT");
     return result;
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function reportProgress(
+  options: ImportDirectoryOptions,
+  progress: ImportProgress,
+): void {
+  throwIfAborted(options.signal);
+  options.onProgress?.(progress);
+  throwIfAborted(options.signal);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
 }
 
 function literalFtsQuery(query: string): string {

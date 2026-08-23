@@ -14,6 +14,23 @@ export interface ImportDirectoryOptions {
   maxFiles?: number;
   /** Approximate maximum characters in a chunk. Defaults to 1,400. */
   chunkSize?: number;
+  /** Cancels discovery or import. Cancellation rolls back the complete import. */
+  signal?: AbortSignal;
+  /** Receives content-free progress metadata. */
+  onProgress?: (progress: ImportProgress) => void;
+}
+
+export type ImportPhase = "discovering" | "importing" | "finalizing";
+
+export interface ImportProgress {
+  phase: ImportPhase;
+  processed: number;
+  /** Unknown during recursive discovery. */
+  total: number | null;
+  imported: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
 }
 
 export type ImportIssueCode =
@@ -92,4 +109,15 @@ export interface FetchedChunk {
 export interface VaultFetchResult extends VaultResult {
   content: string;
   chunks: FetchedChunk[];
+}
+
+export interface VaultSource {
+  sourceId: string;
+  name: string;
+  rootUri: string;
+  collection: string;
+  createdAt: string;
+  lastScannedAt: string | null;
+  status: "ready" | "incomplete";
+  documentCount: number;
 }

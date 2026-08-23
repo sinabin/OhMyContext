@@ -67,7 +67,8 @@ Acceptance:
 
 ## Milestone 3 — Consumer desktop alpha
 
-Status: planned
+Status: in progress — the developer alpha vertical slice is implemented; a
+packaged, signed, no-terminal installation remains outstanding.
 
 Deliverables:
 

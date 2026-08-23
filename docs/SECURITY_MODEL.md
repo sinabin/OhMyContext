@@ -2,9 +2,20 @@
 
 Last updated: 2026-08-23
 
-## Current status: design only
+## Current status: developer alpha
 
-At Milestone 0, OwnContext has no executable product and therefore has **no implemented runtime security controls**. This document is a threat model and release contract. It must not be cited as evidence that encryption, sandboxing, access control, secure deletion, signed updates, or MCP isolation already exists.
+OwnContext now has a runnable developer alpha. Automated prototype tests cover
+atomic import and cancellation, selected path and symlink boundaries, revision
+and purge behavior, collection/date filtering, query-text minimization,
+read-only MCP input and issued-ID boundaries, stdio framing, and reversible
+Codex configuration edits. The Electron window is built with renderer sandboxing,
+context isolation, a CommonJS preload bridge, no Node integration, and a
+restrictive local content security policy.
+
+This is not evidence that the product is safe for sensitive personal data.
+Application-level encryption, complete parser isolation, per-client collection
+grants, signed packaging and updates, comprehensive filesystem adversarial
+coverage, and packaged-release validation remain unimplemented or unverified.
 
 Security status uses three labels:
 
@@ -152,10 +163,10 @@ The exact encryption library and key hierarchy remain undecided. That decision i
 
 | Control area | First implementation target | Public-release requirement | Current status |
 | --- | --- | --- | --- |
-| Path boundaries, deterministic hashes, atomic revision/delete behavior | Milestone 1 | Regression suite passes on packaged app | Designed |
-| FTS candidate filtering by collection and date | Milestone 1 | Cross-collection canary suite passes | Designed |
-| Read-only bounded `search`/`fetch`, opaque IDs, stdio separation | Milestone 2 | Real-client protocol and authorization tests pass | Designed |
-| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability and disclosure test passes | Designed |
+| Path boundaries, deterministic hashes, atomic import/cancel/delete behavior | Milestone 1 | Regression suite passes on packaged app | Prototype verified for current folder importer fixtures |
+| FTS candidate filtering by collection and date | Milestone 1 | Cross-collection canary suite passes | Prototype verified; per-client grants not implemented |
+| Read-only bounded `search`/`fetch`, search-issued IDs, stdio separation | Milestone 2 | Real-client protocol and authorization tests pass | Prototype verified with SDK client and real child process |
+| Connection preview, reversible configuration, cloud-transfer disclosure | Milestone 3 | Non-developer usability and disclosure test passes | Prototype verified for config filesystem cases; usability untested |
 | Export exclusions, checksums, lineage purge, deletion receipt | Milestone 4 | Round-trip and residue tests pass | Designed |
 | Connector manifests, least privilege, revocation, host limits | Milestone 5 | Every shipped connector has fixture and policy evidence | Designed |
 | Application-level encryption of DB/index/temp/backup and OS keychain | Milestone 6 | Required; plaintext release prohibited | Designed |
@@ -207,4 +218,12 @@ Developer prototypes may precede these gates only when clearly labeled, restrict
 
 ## Decision boundary
 
-`[Verification limitation]` Every runtime control in this document is unimplemented at Milestone 0. The design is sufficient to guide isolated prototype work, but not to accept sensitive production data or make security claims. Public distribution is blocked until the release gates above pass on packaged artifacts. Protection against an already compromised unlocked OS and an external AI provider's downstream handling remains outside the product boundary even after those gates pass.
+`[Verification limitation]` The controls marked Prototype verified have passed only
+in the development workspace on the current Windows machine and deterministic
+fixtures. They have not passed the complete adversarial matrix, supported macOS
+devices, an installer, or a signed packaged artifact. This does not block further
+alpha development with non-sensitive fixtures, but it blocks sensitive-data and
+public security claims. Public distribution remains blocked by the release gates
+above. Protection against an already compromised unlocked OS and an external AI
+provider's downstream handling remains outside the product boundary even after
+those gates pass.

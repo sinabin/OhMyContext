@@ -2,6 +2,7 @@ export { HASH_ID_PATTERN, deterministicId } from "./ids.js";
 export {
   fetchDocument,
   importDirectory,
+  listSources,
   openVault,
   purgeDocument,
   searchVault,
@@ -11,6 +12,8 @@ export type {
   FetchedChunk,
   ImportDirectoryOptions,
   ImportDirectoryResult,
+  ImportPhase,
+  ImportProgress,
   ImportedDocument,
   ImportIssue,
   ImportIssueCode,
@@ -19,4 +22,5 @@ export type {
   VaultFetchResult,
   VaultResult,
   VaultSearchResult,
+  VaultSource,
 } from "./types.js";

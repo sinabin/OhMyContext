@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-electron/
 coverage/
 .vite/
 .turbo/
@@ -8,6 +9,9 @@ coverage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 .env
 .env.*
 !.env.example
