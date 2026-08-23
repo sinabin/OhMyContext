@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -30,6 +30,9 @@ import {
 import type {
   DeletionReceipt,
   DeletionReceiptVerification,
+  CommitPreparedDirectoryImportOptions,
+  DirectoryImportPreview,
+  DirectoryImportPreviewIssue,
   FetchDocumentInput,
   FetchedChunk,
   ImportDirectoryOptions,
@@ -37,6 +40,7 @@ import type {
   ImportProgress,
   ImportIssue,
   ImportedDocument,
+  PreparedDirectoryImport,
   PrepareSourcePurgeResult,
   PurgeSourceInput,
   PurgeSourceResult,
@@ -51,6 +55,7 @@ import type {
 const DEFAULT_COLLECTION = "default";
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 10_000;
+const DEFAULT_MAX_ENTRIES = 100_000;
 const DEFAULT_CHUNK_SIZE = 1_400;
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 50;
@@ -60,6 +65,10 @@ const MAX_NEIGHBORS = 5;
 const DEFAULT_FETCH_CHARS = 12_000;
 const MAX_FETCH_CHARS = 50_000;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+const SUPPORTED_DIRECTORY_EXTENSIONS = Object.freeze([".md", ".txt"] as const);
+const MAX_PREVIEW_EXTENSION_GROUPS = 16;
+const MAX_PREVIEW_ISSUE_EXAMPLES = 20;
+const MAX_PREVIEW_PATH_CHARS = 512;
 const OWNCONTEXT_SAMPLE_IMPORT_FILES = new Map(
   OWNCONTEXT_SAMPLE_LIBRARY_FILES
     .filter((file) => /\.(?:md|txt)$/iu.test(file.name))
@@ -82,14 +91,66 @@ interface CandidateFile {
   relativePath: string;
 }
 
+interface ScannedCandidateFile extends CandidateFile {
+  byteLength: number;
+  rawContentHash: string;
+}
+
 interface PreparedFile extends CandidateFile {
+  byteLength: number;
   content: string;
   contentHash: string;
   createdAt: string;
   modifiedAt: string;
+  rawContentHash: string;
   sourceUri: string;
   title: string;
 }
+
+interface ResolvedDirectoryImport {
+  root: string;
+  rootIdentity: string;
+  rootUri: string;
+  sourceName: string;
+  sourceId: string;
+  collection: string;
+  maxFileBytes: number;
+  maxFiles: number;
+  maxEntries: number;
+  chunkSize: number;
+}
+
+interface DirectoryInventoryScan {
+  /** Bounded metadata and hashes only; source bodies are never retained by preflight. */
+  files: ScannedCandidateFile[];
+  supportedFileCount: number;
+  visitedEntryCount: number;
+  candidateBytes: number;
+  unsupportedFileCount: number;
+  oversizedFileCount: number;
+  rejectedLinkCount: number;
+  readErrorCount: number;
+  unsupportedExtensions: Map<string, number>;
+  previewIssues: DirectoryImportPreviewIssue[];
+  previewIssueCount: number;
+  issues: ImportIssue[];
+  fingerprint: string;
+}
+
+interface PreparedDirectoryImportState {
+  resolved: ResolvedDirectoryImport;
+  fingerprint: string;
+  preview: DirectoryImportPreview;
+}
+
+type CandidateInspection =
+  | { status: "candidate"; file: ScannedCandidateFile }
+  | {
+      status: "issue";
+      code: ImportIssue["code"];
+      message: string;
+      fingerprintDetail: readonly (string | number)[];
+    };
 
 interface DocumentRow {
   id: string;
@@ -172,12 +233,37 @@ interface DeletionReceiptRow {
   secure_erase_claimed: number | bigint;
 }
 
-interface DiscoveredFiles {
-  files: CandidateFile[];
-  visited: number;
+const states = new WeakMap<Vault, VaultState>();
+const preparedDirectoryImports = new WeakMap<
+  PreparedDirectoryImport,
+  PreparedDirectoryImportState
+>();
+
+class PreparedDirectoryImportHandle implements PreparedDirectoryImport {
+  public readonly preview: DirectoryImportPreview;
+
+  public constructor(state: PreparedDirectoryImportState) {
+    this.preview = state.preview;
+    preparedDirectoryImports.set(this, state);
+    Object.freeze(this);
+  }
 }
 
-const states = new WeakMap<Vault, VaultState>();
+export class DirectoryImportScopeChangedError extends Error {
+  public readonly code = "IMPORT_SCOPE_CHANGED" as const;
+
+  public constructor() {
+    super("The selected folder changed after its import preview. Scan it again.");
+    this.name = "DirectoryImportScopeChangedError";
+  }
+}
+
+class DirectoryImportEntryLimitError extends RangeError {
+  public constructor(limit: number) {
+    super(`Import exceeds the maxEntries limit of ${limit}`);
+    this.name = "DirectoryImportEntryLimitError";
+  }
+}
 
 class VaultHandle implements Vault {
   public readonly path: string;
@@ -234,6 +320,82 @@ export function importDirectory(
   return importDirectoryInternal(vault, directoryPath, options);
 }
 
+export async function prepareDirectoryImport(
+  directoryPath: string,
+  options: ImportDirectoryOptions = {},
+): Promise<PreparedDirectoryImport> {
+  const resolved = await resolveDirectoryImport(directoryPath, options);
+  const scan = await scanDirectoryInventory(resolved, options);
+  const preview = freezeDirectoryImportPreview(
+    createDirectoryImportPreview(resolved, scan),
+  );
+  const state: PreparedDirectoryImportState = Object.freeze({
+    resolved: Object.freeze({ ...resolved }),
+    fingerprint: scan.fingerprint,
+    preview,
+  });
+  return new PreparedDirectoryImportHandle(state);
+}
+
+export async function commitPreparedDirectoryImport(
+  vault: Vault,
+  prepared: PreparedDirectoryImport,
+  options: CommitPreparedDirectoryImportOptions = {},
+): Promise<ImportDirectoryResult> {
+  if (!prepared || typeof prepared !== "object") {
+    throw new TypeError("prepared must be returned by prepareDirectoryImport");
+  }
+  const preparedState = preparedDirectoryImports.get(prepared);
+  if (!preparedState) {
+    throw new TypeError("prepared must be returned by prepareDirectoryImport");
+  }
+  if (!preparedState.preview.canImport) {
+    throw new RangeError("Prepared directory import has no candidate files");
+  }
+
+  const state = stateFor(vault);
+  if (state.importingSources.size > 0) {
+    throw new Error("Another import is already running for this vault");
+  }
+  const runtimeOptions: ImportDirectoryOptions = {
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+  };
+  const { resolved } = preparedState;
+  state.importingSources.add(resolved.sourceId);
+
+  try {
+    return await transactionAsync(state.db, async () => {
+      let scan: DirectoryInventoryScan;
+      try {
+        const currentRoot = await safeRoot(resolved.root);
+        if (
+          currentRoot.root !== resolved.root ||
+          currentRoot.rootIdentity !== resolved.rootIdentity
+        ) {
+          throw new DirectoryImportScopeChangedError();
+        }
+        scan = await scanDirectoryInventory(resolved, runtimeOptions);
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        if (error instanceof DirectoryImportScopeChangedError) throw error;
+        throw new DirectoryImportScopeChangedError();
+      }
+      if (scan.fingerprint !== preparedState.fingerprint) {
+        throw new DirectoryImportScopeChangedError();
+      }
+      return applyDirectoryInventory(
+        state.db,
+        resolved,
+        scan,
+        runtimeOptions,
+      );
+    }, options.signal);
+  } finally {
+    state.importingSources.delete(resolved.sourceId);
+  }
+}
+
 export async function importOwnContextSampleLibrary(
   vault: Vault,
   directoryPath: string,
@@ -265,9 +427,49 @@ async function importDirectoryInternal(
   internal: InternalImportOptions = {},
 ): Promise<ImportDirectoryResult> {
   const state = stateFor(vault);
-  const db = state.db;
+  const resolved = await resolveDirectoryImport(directoryPath, options, internal);
+  if (state.importingSources.size > 0) {
+    throw new Error("Another import is already running for this vault");
+  }
+  state.importingSources.add(resolved.sourceId);
+
+  try {
+    return await transactionAsync(state.db, async () => {
+      const scan = await scanDirectoryInventory(resolved, options, internal);
+      if (internal.exactFiles) {
+        const actualNames = scan.files.map((candidate) => candidate.relativePath);
+        const expectedNames = [...internal.exactFiles.keys()].sort(compareNames);
+        if (
+          actualNames.length !== expectedNames.length ||
+          actualNames.some((name, index) => name !== expectedNames[index])
+        ) {
+          throw new Error("Built-in sample import inventory changed during verification.");
+        }
+      }
+      return applyDirectoryInventory(
+        state.db,
+        resolved,
+        scan,
+        options,
+        internal,
+      );
+    }, options.signal);
+  } finally {
+    state.importingSources.delete(resolved.sourceId);
+  }
+}
+
+async function resolveDirectoryImport(
+  directoryPath: string,
+  options: ImportDirectoryOptions,
+  internal: InternalImportOptions = {},
+): Promise<ResolvedDirectoryImport> {
   throwIfAborted(options.signal);
-  const collection = boundedText(options.collection ?? DEFAULT_COLLECTION, "collection", 128);
+  const collection = boundedText(
+    options.collection ?? DEFAULT_COLLECTION,
+    "collection",
+    128,
+  );
   const maxFileBytes = boundedInteger(
     options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
     "maxFileBytes",
@@ -278,7 +480,13 @@ async function importDirectoryInternal(
     options.maxFiles ?? DEFAULT_MAX_FILES,
     "maxFiles",
     1,
-    1_000_000,
+    DEFAULT_MAX_ENTRIES,
+  );
+  const maxEntries = boundedInteger(
+    options.maxEntries ?? DEFAULT_MAX_ENTRIES,
+    "maxEntries",
+    1,
+    DEFAULT_MAX_ENTRIES,
   );
   const chunkSize = boundedInteger(
     options.chunkSize ?? DEFAULT_CHUNK_SIZE,
@@ -286,157 +494,704 @@ async function importDirectoryInternal(
     64,
     100_000,
   );
-  const root = await safeRoot(directoryPath);
+  const safe = await safeRoot(directoryPath);
+  throwIfAborted(options.signal);
+  const { root, rootIdentity } = safe;
   const rootUri = internal.provenanceRootUri === undefined
     ? directoryUri(root)
     : sampleProvenanceRootUri(internal.provenanceRootUri);
   const sourceName = boundedText(
-    options.sourceName ?? (basename(root) || root),
+    options.sourceName ?? (basename(root) || "Selected folder"),
     "sourceName",
     512,
   );
-  const sourceId = deterministicId("source", "folder", rootUri, collection);
-  if (state.importingSources.size > 0) {
-    throw new Error("Another import is already running for this vault");
+  return {
+    root,
+    rootIdentity,
+    rootUri,
+    sourceName,
+    sourceId: deterministicId("source", "folder", rootUri, collection),
+    collection,
+    maxFileBytes,
+    maxFiles,
+    maxEntries,
+    chunkSize,
+  };
+}
+
+async function directoryIdentity(root: string): Promise<string> {
+  const info = await lstat(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error("The import root identity changed");
   }
-  state.importingSources.add(sourceId);
+  return fileIdentity(info);
+}
 
+async function assertDirectoryRootIdentity(
+  resolved: Pick<ResolvedDirectoryImport, "root" | "rootIdentity">,
+): Promise<void> {
   try {
-    return await transactionAsync(db, async () => {
-      const issues: ImportIssue[] = [];
-      const startedAt = new Date().toISOString();
-      const documents: ImportedDocument[] = [];
-      let imported = 0;
-      let updated = 0;
-      let unchanged = 0;
+    if (await directoryIdentity(resolved.root) !== resolved.rootIdentity) {
+      throw new DirectoryImportScopeChangedError();
+    }
+  } catch (error) {
+    if (error instanceof DirectoryImportScopeChangedError) throw error;
+    throw new DirectoryImportScopeChangedError();
+  }
+}
 
-      const progress = (
-        phase: ImportProgress["phase"],
-        processed: number,
-        total: number | null,
-      ): void => {
-        reportProgress(options, {
-          phase,
-          processed,
-          total,
-          imported,
-          updated,
-          unchanged,
-          skipped: issues.length,
-        });
-      };
+async function scanDirectoryInventory(
+  resolved: ResolvedDirectoryImport,
+  options: Pick<ImportDirectoryOptions, "signal" | "onProgress">,
+  internal: InternalImportOptions = {},
+): Promise<DirectoryInventoryScan> {
+  const directories = [resolved.root];
+  const files: ScannedCandidateFile[] = [];
+  const issues: ImportIssue[] = [];
+  const previewIssues: DirectoryImportPreviewIssue[] = [];
+  const unsupportedExtensions = new Map<string, number>();
+  const seenRelativePaths = new Set<string>();
+  const inventoryHash = createHash("sha256");
+  inventoryHash.update("owncontext-directory-inventory-v1\0");
+  let discoveredEntryCount = 0;
+  let visitedEntryCount = 0;
+  let supportedFileCount = 0;
+  let candidateBytes = 0;
+  let unsupportedFileCount = 0;
+  let oversizedFileCount = 0;
+  let rejectedLinkCount = 0;
+  let readErrorCount = 0;
+  let previewIssueCount = 0;
 
-      // Incompleteness is visible to reads on this connection. Other database
-      // connections continue seeing the last committed snapshot until COMMIT.
-      db.prepare(`
-        INSERT INTO sources(
-          id, kind, root_uri, collection, display_name, created_at, last_scanned_at
-        ) VALUES (?, 'folder', ?, ?, ?, ?, NULL)
-        ON CONFLICT(id) DO UPDATE SET
-          display_name = excluded.display_name,
-          last_scanned_at = NULL
-      `).run(sourceId, rootUri, collection, sourceName, startedAt);
+  const addPreviewIssue = (
+    code: DirectoryImportPreviewIssue["code"],
+    path: string,
+  ): void => {
+    previewIssueCount += 1;
+    if (previewIssues.length >= MAX_PREVIEW_ISSUE_EXAMPLES) return;
+    previewIssues.push(Object.freeze({
+      code,
+      path: previewPath(path),
+      message: previewIssueMessage(code),
+    }));
+  };
+  const progress = (total: number | null): void => {
+    reportProgress(options, {
+      phase: "discovering",
+      processed: visitedEntryCount,
+      total,
+      imported: 0,
+      updated: 0,
+      unchanged: 0,
+      skipped: issues.length,
+    });
+  };
 
-      progress("discovering", 0, null);
-      const discovery = await discoverFiles(
-        root,
-        maxFiles,
-        issues,
-        options.signal,
-        (processed) => progress("discovering", processed, null),
-      );
-      const candidates = discovery.files;
-      if (internal.exactFiles) {
-        const actualNames = candidates.map((candidate) => candidate.relativePath);
-        const expectedNames = [...internal.exactFiles.keys()].sort(compareNames);
-        if (
-          actualNames.length !== expectedNames.length ||
-          actualNames.some((name, index) => name !== expectedNames[index])
-        ) {
-          throw new Error("Built-in sample import inventory changed during verification.");
-        }
-      }
-      progress("discovering", discovery.visited, discovery.visited);
-      const seenRelativePaths = new Set<string>();
-      let processed = 0;
-      progress("importing", processed, candidates.length);
-      for (const candidate of candidates) {
+  progress(null);
+  while (directories.length > 0) {
+    throwIfAborted(options.signal);
+    await assertDirectoryRootIdentity(resolved);
+    const directory = directories.pop();
+    if (!directory) continue;
+    const entries = [];
+    try {
+      const handle = await opendir(directory);
+      for await (const entry of handle) {
         throwIfAborted(options.signal);
-        if (seenRelativePaths.has(candidate.relativePath)) {
-          issues.push({
-            code: "read-error",
-            path: candidate.relativePath,
-            message: "Another file has the same normalized relative path",
-          });
-          processed += 1;
-          progress("importing", processed, candidates.length);
-          continue;
+        if (discoveredEntryCount >= resolved.maxEntries) {
+          throw new DirectoryImportEntryLimitError(resolved.maxEntries);
         }
-        seenRelativePaths.add(candidate.relativePath);
-        const file = await prepareFile(
-          root,
-          candidate,
-          maxFileBytes,
-          issues,
-          options.signal,
-          internal.provenanceRootUri === undefined ? undefined : rootUri,
-          internal.exactFiles?.get(candidate.relativePath),
-        );
-        if (!file) {
-          if (internal.exactFiles) {
-            throw new Error("Built-in sample bytes changed during import.");
-          }
-          processed += 1;
-          progress("importing", processed, candidates.length);
-          continue;
-        }
+        discoveredEntryCount += 1;
+        entries.push(entry);
+      }
+    } catch (error) {
+      throwIfAborted(options.signal);
+      if (error instanceof DirectoryImportEntryLimitError) throw error;
+      const displayPath = normalizeRelative(resolved.root, directory) || ".";
+      readErrorCount += 1;
+      issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
+      addPreviewIssue("read-error", displayPath);
+      updateInventoryHash(inventoryHash, ["directory-read-error", displayPath]);
+      progress(null);
+      continue;
+    }
+    entries.sort((left, right) => compareNames(left.name, right.name));
 
-        const importedDocument = importPreparedFile(
-          db,
-          sourceId,
-          file,
-          chunkSize,
-          startedAt,
-        );
-        documents.push(importedDocument);
-        if (importedDocument.status === "created") imported += 1;
-        else if (importedDocument.status === "updated") updated += 1;
-        else unchanged += 1;
-        processed += 1;
-        progress("importing", processed, candidates.length);
+    for (const entry of entries) {
+      throwIfAborted(options.signal);
+      visitedEntryCount += 1;
+      const absolutePath = resolve(directory, entry.name);
+      const displayPath = normalizeRelative(resolved.root, absolutePath);
+      let info;
+      try {
+        info = await lstat(absolutePath);
+      } catch (error) {
+        readErrorCount += 1;
+        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
+        addPreviewIssue("read-error", displayPath);
+        updateInventoryHash(inventoryHash, ["read-error", displayPath]);
+        progress(null);
+        continue;
       }
 
-      if (internal.exactFiles) {
-        const expectedNames = [...internal.exactFiles.keys()];
-        const placeholders = expectedNames.map(() => "?").join(", ");
-        db.prepare(`
-          DELETE FROM documents
-          WHERE source_id = ?
-            AND relative_path NOT IN (${placeholders})
-        `).run(sourceId, ...expectedNames);
+      if (info.isSymbolicLink()) {
+        rejectedLinkCount += 1;
+        issues.push({
+          code: "symlink",
+          path: displayPath,
+          message: "Symbolic links and junctions are not followed",
+        });
+        addPreviewIssue("symlink", displayPath);
+        updateInventoryHash(inventoryHash, ["link", displayPath]);
+        progress(null);
+        continue;
       }
 
-      progress("finalizing", processed, candidates.length);
-      throwIfAborted(options.signal);
-      db.prepare("UPDATE sources SET last_scanned_at = ? WHERE id = ?")
-        .run(new Date().toISOString(), sourceId);
-      throwIfAborted(options.signal);
+      let actualPath: string;
+      try {
+        actualPath = await realpath(absolutePath);
+      } catch (error) {
+        readErrorCount += 1;
+        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
+        addPreviewIssue("read-error", displayPath);
+        updateInventoryHash(inventoryHash, ["read-error", displayPath]);
+        progress(null);
+        continue;
+      }
+      if (!isWithin(resolved.root, actualPath)) {
+        readErrorCount += 1;
+        issues.push({
+          code: "outside-root",
+          path: displayPath,
+          message: "Resolved path is outside the selected import root",
+        });
+        addPreviewIssue("outside-root", displayPath);
+        updateInventoryHash(inventoryHash, ["outside-root", displayPath]);
+        progress(null);
+        continue;
+      }
 
-      return {
-        sourceId,
-        rootUri,
-        collection,
-        scanned: candidates.length,
-        imported,
-        updated,
-        unchanged,
-        skipped: issues.length,
-        documents,
-        issues,
+      if (info.isDirectory()) {
+        updateInventoryHash(inventoryHash, ["directory", displayPath]);
+        directories.push(actualPath);
+        progress(null);
+        continue;
+      }
+      if (!info.isFile()) {
+        updateInventoryHash(inventoryHash, [
+          "other",
+          displayPath,
+          Number(info.mode),
+          Number(info.size),
+        ]);
+        progress(null);
+        continue;
+      }
+
+      if (info.nlink > 1) {
+        rejectedLinkCount += 1;
+        issues.push({
+          code: "hardlink",
+          path: displayPath,
+          message: "Files with multiple hard links are not imported",
+        });
+        addPreviewIssue("hardlink", displayPath);
+        updateInventoryHash(inventoryHash, [
+          "hardlink",
+          displayPath,
+          Number(info.nlink),
+          Number(info.size),
+          Number(info.mtimeMs),
+        ]);
+        progress(null);
+        continue;
+      }
+
+      if (!isSupportedTextFile(entry.name)) {
+        unsupportedFileCount += 1;
+        const extension = previewExtension(entry.name);
+        recordUnsupportedExtension(unsupportedExtensions, extension);
+        addPreviewIssue("unsupported-file", displayPath);
+        updateInventoryHash(inventoryHash, [
+          "unsupported",
+          displayPath,
+          extension,
+          Number(info.size),
+          Number(info.mtimeMs),
+        ]);
+        progress(null);
+        continue;
+      }
+
+      supportedFileCount += 1;
+      if (supportedFileCount > resolved.maxFiles) {
+        throw new RangeError(`Import exceeds the maxFiles limit of ${resolved.maxFiles}`);
+      }
+      if (seenRelativePaths.has(displayPath)) {
+        readErrorCount += 1;
+        issues.push({
+          code: "read-error",
+          path: displayPath,
+          message: "Another file has the same normalized relative path",
+        });
+        addPreviewIssue("read-error", displayPath);
+        updateInventoryHash(inventoryHash, ["normalized-path-collision", displayPath]);
+        progress(null);
+        continue;
+      }
+      seenRelativePaths.add(displayPath);
+
+      if (info.size > resolved.maxFileBytes) {
+        oversizedFileCount += 1;
+        issues.push({
+          code: "too-large",
+          path: displayPath,
+          message: `File is ${info.size} bytes; limit is ${resolved.maxFileBytes}`,
+        });
+        addPreviewIssue("too-large", displayPath);
+        updateInventoryHash(inventoryHash, [
+          "too-large",
+          displayPath,
+          Number(info.size),
+          Number(info.mtimeMs),
+        ]);
+        progress(null);
+        continue;
+      }
+
+      const candidate: CandidateFile = {
+        absolutePath: actualPath,
+        relativePath: displayPath,
       };
-    }, options.signal);
+      const inspection = await inspectCandidateFile(
+        resolved.root,
+        candidate,
+        resolved.maxFileBytes,
+        options.signal,
+      );
+      if (inspection.status === "issue") {
+        if (inspection.code === "too-large") oversizedFileCount += 1;
+        else if (
+          inspection.code === "symlink" ||
+          inspection.code === "hardlink"
+        ) rejectedLinkCount += 1;
+        else if (
+          inspection.code === "read-error" ||
+          inspection.code === "outside-root"
+        ) readErrorCount += 1;
+        issues.push({
+          code: inspection.code,
+          path: displayPath,
+          message: inspection.message,
+        });
+        addPreviewIssue(inspection.code, displayPath);
+        updateInventoryHash(inventoryHash, [
+          inspection.code,
+          displayPath,
+          ...inspection.fingerprintDetail,
+        ]);
+        progress(null);
+        continue;
+      }
+
+      if (
+        internal.exactFiles &&
+        !internal.exactFiles.has(inspection.file.relativePath)
+      ) {
+        updateInventoryHash(inventoryHash, [
+          "unexpected-sample-file",
+          inspection.file.relativePath,
+          inspection.file.byteLength,
+          inspection.file.rawContentHash,
+        ]);
+      } else {
+        updateInventoryHash(inventoryHash, [
+          "candidate",
+          inspection.file.relativePath,
+          inspection.file.byteLength,
+          inspection.file.rawContentHash,
+        ]);
+      }
+      files.push(inspection.file);
+      candidateBytes += inspection.file.byteLength;
+      progress(null);
+    }
+  }
+  files.sort((left, right) => compareNames(left.relativePath, right.relativePath));
+  await assertDirectoryRootIdentity(resolved);
+  progress(visitedEntryCount);
+
+  return {
+    files,
+    supportedFileCount,
+    visitedEntryCount,
+    candidateBytes,
+    unsupportedFileCount,
+    oversizedFileCount,
+    rejectedLinkCount,
+    readErrorCount,
+    unsupportedExtensions,
+    previewIssues,
+    previewIssueCount,
+    issues,
+    fingerprint: inventoryHash.digest("hex"),
+  };
+}
+
+async function inspectCandidateFile(
+  root: string,
+  candidate: CandidateFile,
+  maxFileBytes: number,
+  signal: AbortSignal | undefined,
+): Promise<CandidateInspection> {
+  let fileHandle;
+  try {
+    throwIfAborted(signal);
+    const noFollow = "O_NOFOLLOW" in constants
+      ? (constants as typeof constants & { O_NOFOLLOW: number }).O_NOFOLLOW
+      : 0;
+    fileHandle = await open(candidate.absolutePath, constants.O_RDONLY | noFollow);
+    const opened = await fileHandle.stat();
+    if (!opened.isFile()) {
+      return inspectionIssue("read-error", "Path is no longer a regular file", [
+        Number(opened.size),
+      ]);
+    }
+    if (opened.nlink > 1) {
+      return inspectionIssue("hardlink", "Files with multiple hard links are not imported", [
+        Number(opened.nlink),
+        Number(opened.size),
+        Number(opened.mtimeMs),
+      ]);
+    }
+    if (opened.size > maxFileBytes) {
+      return inspectionIssue(
+        "too-large",
+        `File is ${opened.size} bytes; limit is ${maxFileBytes}`,
+        [Number(opened.size), Number(opened.mtimeMs)],
+      );
+    }
+    const openedPathStatus = await openedPathBoundaryStatus(
+      root,
+      candidate.absolutePath,
+      opened,
+    );
+    if (openedPathStatus === "outside-root") {
+      return inspectionIssue(
+        "outside-root",
+        "File moved outside the import root while it was being scanned",
+        [],
+      );
+    }
+    if (openedPathStatus === "identity-changed") {
+      return inspectionIssue(
+        "read-error",
+        "The opened file no longer matches its path",
+        [],
+      );
+    }
+
+    const hash = createHash("sha256");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    let invalidUtf8 = false;
+    while (true) {
+      throwIfAborted(signal);
+      const { bytesRead } = await fileHandle.read(buffer, 0, buffer.byteLength, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+      if (offset > maxFileBytes) {
+        return inspectionIssue(
+          "too-large",
+          `File grew beyond the ${maxFileBytes} byte limit while being scanned`,
+          [offset],
+        );
+      }
+      const bytes = buffer.subarray(0, bytesRead);
+      hash.update(bytes);
+      if (!invalidUtf8) {
+        try {
+          decoder.decode(bytes, { stream: true });
+        } catch {
+          invalidUtf8 = true;
+        }
+      }
+    }
+    if (!invalidUtf8) {
+      try {
+        decoder.decode();
+      } catch {
+        invalidUtf8 = true;
+      }
+    }
+    const closedOver = await fileHandle.stat();
+    if (closedOver.nlink > 1) {
+      return inspectionIssue("hardlink", "Files with multiple hard links are not imported", [
+        Number(closedOver.nlink),
+        offset,
+        hash.copy().digest("hex"),
+      ]);
+    }
+    if (invalidUtf8) {
+      return inspectionIssue("invalid-utf8", "Only valid UTF-8 .md and .txt files are supported", [
+        offset,
+        hash.copy().digest("hex"),
+      ]);
+    }
+    if (
+      closedOver.size !== opened.size ||
+      closedOver.mtimeMs !== opened.mtimeMs ||
+      closedOver.dev !== opened.dev ||
+      closedOver.ino !== opened.ino ||
+      closedOver.size !== offset
+    ) {
+      return inspectionIssue("read-error", "File changed while it was being scanned", [
+        offset,
+        hash.copy().digest("hex"),
+      ]);
+    }
+    const closedPathStatus = await openedPathBoundaryStatus(
+      root,
+      candidate.absolutePath,
+      closedOver,
+    );
+    if (closedPathStatus === "outside-root") {
+      return inspectionIssue(
+        "outside-root",
+        "File moved outside the import root while it was being scanned",
+        [],
+      );
+    }
+    if (closedPathStatus === "identity-changed") {
+      return inspectionIssue(
+        "read-error",
+        "The opened file no longer matches its path",
+        [],
+      );
+    }
+    return {
+      status: "candidate",
+      file: {
+        ...candidate,
+        byteLength: offset,
+        rawContentHash: hash.digest("hex"),
+      },
+    };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return inspectionIssue("read-error", errorMessage(error), []);
   } finally {
-    state.importingSources.delete(sourceId);
+    await fileHandle?.close();
+  }
+}
+
+function inspectionIssue(
+  code: ImportIssue["code"],
+  message: string,
+  fingerprintDetail: readonly (string | number)[],
+): CandidateInspection {
+  return { status: "issue", code, message, fingerprintDetail };
+}
+
+async function applyDirectoryInventory(
+  db: VaultStorageConnection,
+  resolved: ResolvedDirectoryImport,
+  scan: DirectoryInventoryScan,
+  options: Pick<ImportDirectoryOptions, "signal" | "onProgress">,
+  internal: InternalImportOptions = {},
+): Promise<ImportDirectoryResult> {
+  const issues = [...scan.issues];
+  const startedAt = new Date().toISOString();
+  const documents: ImportedDocument[] = [];
+  let imported = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let processed = 0;
+  const progress = (phase: ImportProgress["phase"]): void => {
+    reportProgress(options, {
+      phase,
+      processed,
+      total: scan.files.length,
+      imported,
+      updated,
+      unchanged,
+      skipped: issues.length,
+    });
+  };
+
+  db.prepare(`
+    INSERT INTO sources(
+      id, kind, root_uri, collection, display_name, created_at, last_scanned_at
+    ) VALUES (?, 'folder', ?, ?, ?, ?, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      last_scanned_at = NULL
+  `).run(
+    resolved.sourceId,
+    resolved.rootUri,
+    resolved.collection,
+    resolved.sourceName,
+    startedAt,
+  );
+
+  progress("importing");
+  for (const candidate of scan.files) {
+    throwIfAborted(options.signal);
+    const file = await prepareFile(
+      resolved.root,
+      candidate,
+      resolved.maxFileBytes,
+      issues,
+      options.signal,
+      internal.provenanceRootUri === undefined ? undefined : resolved.rootUri,
+      internal.exactFiles?.get(candidate.relativePath),
+    );
+    if (!file) {
+      if (internal.exactFiles) {
+        throw new Error("Built-in sample bytes changed during import.");
+      }
+      throw new DirectoryImportScopeChangedError();
+    }
+
+    const importedDocument = importPreparedFile(
+      db,
+      resolved.sourceId,
+      file,
+      resolved.chunkSize,
+      startedAt,
+    );
+    documents.push(importedDocument);
+    if (importedDocument.status === "created") imported += 1;
+    else if (importedDocument.status === "updated") updated += 1;
+    else unchanged += 1;
+    processed += 1;
+    progress("importing");
+  }
+
+  if (internal.exactFiles) {
+    const expectedNames = [...internal.exactFiles.keys()];
+    const placeholders = expectedNames.map(() => "?").join(", ");
+    db.prepare(`
+      DELETE FROM documents
+      WHERE source_id = ?
+        AND relative_path NOT IN (${placeholders})
+    `).run(resolved.sourceId, ...expectedNames);
+  }
+
+  progress("finalizing");
+  throwIfAborted(options.signal);
+  await assertDirectoryRootIdentity(resolved);
+  throwIfAborted(options.signal);
+  db.prepare("UPDATE sources SET last_scanned_at = ? WHERE id = ?")
+    .run(new Date().toISOString(), resolved.sourceId);
+  throwIfAborted(options.signal);
+  return {
+    sourceId: resolved.sourceId,
+    rootUri: resolved.rootUri,
+    collection: resolved.collection,
+    scanned: scan.supportedFileCount,
+    imported,
+    updated,
+    unchanged,
+    skipped: issues.length,
+    documents,
+    issues,
+  };
+}
+
+function createDirectoryImportPreview(
+  resolved: ResolvedDirectoryImport,
+  scan: DirectoryInventoryScan,
+): DirectoryImportPreview {
+  return {
+    schemaVersion: 1,
+    sourceName: resolved.sourceName,
+    collection: resolved.collection,
+    supportedExtensions: [...SUPPORTED_DIRECTORY_EXTENSIONS],
+    visitedEntryCount: scan.visitedEntryCount,
+    candidateFileCount: scan.files.length,
+    candidateBytes: scan.candidateBytes,
+    unsupportedFileCount: scan.unsupportedFileCount,
+    oversizedFileCount: scan.oversizedFileCount,
+    rejectedLinkCount: scan.rejectedLinkCount,
+    readErrorCount: scan.readErrorCount,
+    unsupportedByExtension: [...scan.unsupportedExtensions.entries()]
+      .map(([extension, count]) => ({ extension, count }))
+      .sort((left, right) => compareNames(left.extension, right.extension)),
+    issueExamples: [...scan.previewIssues],
+    truncatedIssueCount: scan.previewIssueCount - scan.previewIssues.length,
+    canImport: scan.files.length > 0,
+  };
+}
+
+function freezeDirectoryImportPreview(
+  preview: DirectoryImportPreview,
+): DirectoryImportPreview {
+  const unsupportedByExtension = Object.freeze(
+    preview.unsupportedByExtension.map((item) => Object.freeze({ ...item })),
+  );
+  const issueExamples = Object.freeze(
+    preview.issueExamples.map((item) => Object.freeze({ ...item })),
+  );
+  return Object.freeze({
+    ...preview,
+    supportedExtensions: Object.freeze([...preview.supportedExtensions]),
+    unsupportedByExtension,
+    issueExamples,
+  });
+}
+
+function updateInventoryHash(
+  hash: ReturnType<typeof createHash>,
+  value: readonly (string | number)[],
+): void {
+  const serialized = JSON.stringify(value);
+  hash.update(String(Buffer.byteLength(serialized, "utf8")));
+  hash.update(":");
+  hash.update(serialized);
+}
+
+function recordUnsupportedExtension(counts: Map<string, number>, extension: string): void {
+  const existing = counts.get(extension);
+  if (existing !== undefined) {
+    counts.set(extension, existing + 1);
+    return;
+  }
+  if (counts.size < MAX_PREVIEW_EXTENSION_GROUPS - 1) {
+    counts.set(extension, 1);
+    return;
+  }
+  counts.set("(other)", (counts.get("(other)") ?? 0) + 1);
+}
+
+function previewExtension(name: string): string {
+  const extension = extname(name).toLocaleLowerCase("en-US");
+  if (extension.length === 0) return "(none)";
+  return extension.length <= 32 ? extension : "(long extension)";
+}
+
+function previewPath(path: string): string {
+  if (path.length <= MAX_PREVIEW_PATH_CHARS) return path;
+  return `${path.slice(0, MAX_PREVIEW_PATH_CHARS - 1)}…`;
+}
+
+function previewIssueMessage(code: DirectoryImportPreviewIssue["code"]): string {
+  switch (code) {
+    case "hardlink":
+      return "Files with multiple hard links are not imported.";
+    case "invalid-utf8":
+      return "Supported text file is not valid UTF-8.";
+    case "outside-root":
+      return "Entry resolved outside the selected folder.";
+    case "read-error":
+      return "Entry could not be inspected safely.";
+    case "symlink":
+      return "Symbolic links and junctions are not followed.";
+    case "too-large":
+      return "Supported file exceeds the configured size limit.";
+    case "unsupported-file":
+      return "File type is not supported.";
   }
 }
 
@@ -1139,100 +1894,69 @@ function importPreparedFile(
   };
 }
 
-async function safeRoot(directoryPath: string): Promise<string> {
+async function safeRoot(
+  directoryPath: string,
+): Promise<{ root: string; rootIdentity: string }> {
   if (typeof directoryPath !== "string" || directoryPath.trim().length === 0) {
     throw new TypeError("directoryPath must be a non-empty path");
   }
   const requested = resolve(directoryPath);
-  const linkInfo = await lstat(requested);
-  if (linkInfo.isSymbolicLink()) {
+  const before = await lstat(requested);
+  if (before.isSymbolicLink()) {
     throw new Error("The import root must not be a symbolic link");
   }
-  if (!linkInfo.isDirectory()) {
+  if (!before.isDirectory()) {
     throw new Error("The import root must be a directory");
   }
-  return realpath(requested);
+  const root = await realpath(requested);
+  const [after, canonical] = await Promise.all([lstat(requested), lstat(root)]);
+  if (
+    after.isSymbolicLink() ||
+    canonical.isSymbolicLink() ||
+    !after.isDirectory() ||
+    !canonical.isDirectory() ||
+    fileIdentity(before) !== fileIdentity(after) ||
+    fileIdentity(before) !== fileIdentity(canonical)
+  ) {
+    throw new Error("The import root changed while it was being resolved");
+  }
+  return { root, rootIdentity: fileIdentity(before) };
 }
 
-async function discoverFiles(
+function fileIdentity(info: { dev: number | bigint; ino: number | bigint; birthtimeMs: number }): string {
+  return `${info.dev}:${info.ino}:${info.birthtimeMs}`;
+}
+
+async function openedPathBoundaryStatus(
   root: string,
-  maxFiles: number,
-  issues: ImportIssue[],
-  signal: AbortSignal | undefined,
-  onVisited: (processed: number) => void,
-): Promise<DiscoveredFiles> {
-  const directories = [root];
-  const files: CandidateFile[] = [];
-  let visited = 0;
-  while (directories.length > 0) {
-    throwIfAborted(signal);
-    const directory = directories.pop();
-    if (!directory) continue;
-    const entries = [];
-    const handle = await opendir(directory);
-    for await (const entry of handle) entries.push(entry);
-    entries.sort((left, right) => compareNames(left.name, right.name));
-
-    for (const entry of entries) {
-      throwIfAborted(signal);
-      visited += 1;
-      onVisited(visited);
-      throwIfAborted(signal);
-      const absolutePath = resolve(directory, entry.name);
-      const displayPath = normalizeRelative(root, absolutePath);
-      let info;
-      try {
-        info = await lstat(absolutePath);
-      } catch (error) {
-        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
-        continue;
-      }
-      if (info.isSymbolicLink()) {
-        issues.push({
-          code: "symlink",
-          path: displayPath,
-          message: "Symbolic links and junctions are not followed",
-        });
-        continue;
-      }
-
-      let actualPath: string;
-      try {
-        actualPath = await realpath(absolutePath);
-      } catch (error) {
-        issues.push({ code: "read-error", path: displayPath, message: errorMessage(error) });
-        continue;
-      }
-      if (!isWithin(root, actualPath)) {
-        issues.push({
-          code: "outside-root",
-          path: displayPath,
-          message: "Resolved path is outside the selected import root",
-        });
-        continue;
-      }
-
-      if (info.isDirectory()) {
-        directories.push(actualPath);
-        continue;
-      }
-      if (!info.isFile() || !isSupportedTextFile(entry.name)) continue;
-      if (files.length >= maxFiles) {
-        throw new RangeError(`Import exceeds the maxFiles limit of ${maxFiles}`);
-      }
-      files.push({
-        absolutePath: actualPath,
-        relativePath: normalizeRelative(root, actualPath),
-      });
-    }
+  path: string,
+  opened: {
+    dev: number | bigint;
+    ino: number | bigint;
+    birthtimeMs: number;
+    nlink: number;
+    isFile(): boolean;
+  },
+): Promise<"within-root" | "outside-root" | "identity-changed"> {
+  const canonical = await realpath(path);
+  if (!isWithin(root, canonical)) return "outside-root";
+  const current = await lstat(canonical);
+  if (
+    current.isSymbolicLink() ||
+    !current.isFile() ||
+    !opened.isFile() ||
+    current.nlink > 1 ||
+    opened.nlink > 1 ||
+    fileIdentity(current) !== fileIdentity(opened)
+  ) {
+    return "identity-changed";
   }
-  files.sort((left, right) => compareNames(left.relativePath, right.relativePath));
-  return { files, visited };
+  return "within-root";
 }
 
 async function prepareFile(
   root: string,
-  candidate: CandidateFile,
+  candidate: ScannedCandidateFile,
   maxFileBytes: number,
   issues: ImportIssue[],
   signal: AbortSignal | undefined,
@@ -1257,6 +1981,9 @@ async function prepareFile(
       });
       return null;
     }
+    if (info.nlink > 1) {
+      throw new DirectoryImportScopeChangedError();
+    }
     if (info.size > maxFileBytes) {
       issues.push({
         code: "too-large",
@@ -1265,17 +1992,50 @@ async function prepareFile(
       });
       return null;
     }
-    if (!isWithin(root, await realpath(candidate.absolutePath))) {
-      issues.push({
-        code: "outside-root",
-        path: candidate.relativePath,
-        message: "File moved outside the import root while it was being read",
-      });
-      return null;
+    if (
+      await openedPathBoundaryStatus(root, candidate.absolutePath, info) !== "within-root"
+    ) {
+      throw new DirectoryImportScopeChangedError();
     }
     throwIfAborted(signal);
-    const buffer = await fileHandle.readFile();
+    const chunks: Buffer[] = [];
+    const readBuffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxFileBytes + 1));
+    let offset = 0;
+    while (true) {
+      throwIfAborted(signal);
+      const remainingWithSentinel = maxFileBytes - offset + 1;
+      const { bytesRead } = await fileHandle.read(
+        readBuffer,
+        0,
+        Math.min(readBuffer.byteLength, remainingWithSentinel),
+        offset,
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+      if (offset > maxFileBytes) {
+        throw new DirectoryImportScopeChangedError();
+      }
+      chunks.push(Buffer.from(readBuffer.subarray(0, bytesRead)));
+    }
+    const buffer = Buffer.concat(chunks, offset);
     throwIfAborted(signal);
+    const closedOver = await fileHandle.stat();
+    throwIfAborted(signal);
+    if (closedOver.nlink > 1) {
+      throw new DirectoryImportScopeChangedError();
+    }
+    if (
+      await openedPathBoundaryStatus(root, candidate.absolutePath, closedOver) !== "within-root"
+    ) {
+      throw new DirectoryImportScopeChangedError();
+    }
+    const rawContentHash = createHash("sha256").update(buffer).digest("hex");
+    if (
+      buffer.byteLength !== candidate.byteLength ||
+      rawContentHash !== candidate.rawContentHash
+    ) {
+      throw new DirectoryImportScopeChangedError();
+    }
     if (exactBytes !== undefined && !buffer.equals(exactBytes)) {
       issues.push({
         code: "read-error",
@@ -1308,16 +2068,20 @@ async function prepareFile(
     const birth = info.birthtimeMs > 0 ? info.birthtime : info.ctime;
     return {
       ...candidate,
+      byteLength: buffer.byteLength,
       content,
       contentHash: contentHash(content),
       createdAt: validIso(birth),
       modifiedAt: validIso(info.mtime),
+      rawContentHash,
       sourceUri: provenanceRootUri === undefined
         ? pathToFileURL(candidate.absolutePath).href
         : provenanceDocumentUri(provenanceRootUri, candidate.relativePath),
       title: titleFromText(content, fallbackTitle),
     };
   } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof DirectoryImportScopeChangedError) throw error;
     issues.push({
       code: "read-error",
       path: candidate.relativePath,

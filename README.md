@@ -2,9 +2,17 @@
 
 OwnContext is a local-first personal context vault that turns user-controlled files and exports into cited, read-only context for MCP-compatible AI clients.
 
-The developer alpha now imports local text and Markdown files atomically, stores provenance in a local SQLite vault, searches the collection, exposes bounded `search` and `fetch` over a local MCP server, includes a non-sensitive built-in sample library, and provides desktop flows for reversible Codex and Claude Code configuration.
+The developer alpha now previews an eligible local-folder inventory before it
+atomically imports UTF-8 text and Markdown files, stores provenance in a local
+SQLite vault, searches the collection, exposes bounded `search` and `fetch` over
+a local MCP server, includes a non-sensitive built-in sample library, and
+provides desktop flows for reversible Codex and Claude Code configuration.
 
-It is not a public consumer release. Application-level encryption, collection-isolation side-channel validation, AI-client executable provenance checks, safe configuration-backup retention, signed packaging and updates, parser isolation, and license selection remain release gates. Use non-sensitive fixture data only.
+It is not a public consumer release. Application-level encryption,
+handle-relative or equivalently reviewed folder traversal, collection-isolation
+side-channel validation, AI-client executable provenance checks, safe
+configuration-backup retention, signed packaging and updates, parser isolation,
+and license selection remain release gates. Use non-sensitive fixture data only.
 
 ## Product principles
 
@@ -122,7 +130,9 @@ No CPU, memory, storage, collection-size, or latency figure is a support claim
 until it has been measured on the packaged build. See the
 [platform and measurement plan](docs/HARDWARE_REQUIREMENTS.md).
 
-Project licensing is intentionally pending the maintainer's Apache-2.0 versus AGPL decision. Until a license is added, the repository is not ready for public redistribution.
+Project licensing is intentionally deferred, and no candidate or license family
+has been shortlisted. Until a license is selected and added, the repository is
+not ready for public redistribution.
 
 ## Project contracts
 
@@ -132,5 +142,5 @@ Project licensing is intentionally pending the maintainer's Apache-2.0 versus AG
 - [Connector acquisition policy](docs/CONNECTOR_POLICY.md)
 - [Security and privacy model](docs/SECURITY_MODEL.md)
 - [Windows-first encryption architecture](docs/ENCRYPTION_ARCHITECTURE.md)
-- [Apache-2.0 versus AGPL-3.0 explainer](docs/LICENSE_OPTIONS.ko.md)
+- [License decision status](docs/LICENSE_DECISION.ko.md)
 - [Release compliance evidence](docs/RELEASE_COMPLIANCE.md)

@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type {
   ClaudeCodeConnectionMutation,
   ClaudeCodeConnectionPreview,
   CodexConnectionMutation,
   CodexConnectionPreview,
+  DirectoryImportResultView,
   DeletionReceiptView,
   FetchResponse,
   ImportProgress,
+  PrepareDirectoryImportResponse,
   SourcePurgePreview,
   VaultSource,
 } from "../electron/preload.cjs";
@@ -24,22 +26,52 @@ interface Result {
 }
 
 type View = "library" | "connections";
-type Activity = "import" | "search" | "purge";
+type Activity = "preflight" | "import" | "search" | "purge";
 
-function summarizeImport(value: unknown): string {
-  if (!value || typeof value !== "object") {
-    return "Import completed.";
-  }
+interface ImportCountSummary {
+  imported: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+}
 
-  const record = value as Record<string, unknown>;
+function summarizeImport(record: ImportCountSummary): string {
   const parts = [
-    typeof record.imported === "number" ? `${record.imported} imported` : undefined,
-    typeof record.updated === "number" ? `${record.updated} updated` : undefined,
-    typeof record.unchanged === "number" ? `${record.unchanged} unchanged` : undefined,
-    typeof record.skipped === "number" ? `${record.skipped} skipped` : undefined,
-  ].filter(Boolean);
+    `${record.imported} imported`,
+    `${record.updated} updated`,
+    `${record.unchanged} unchanged`,
+    `${record.skipped} skipped`,
+  ];
 
-  return parts.length > 0 ? parts.join(" · ") : "Import completed.";
+  return parts.join(" · ");
+}
+
+function summarizeSampleImport(value: unknown): string {
+  if (!value || typeof value !== "object") return "Sample import completed.";
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.imported !== "number" ||
+    typeof record.updated !== "number" ||
+    typeof record.unchanged !== "number" ||
+    typeof record.skipped !== "number"
+  ) {
+    return "Sample import completed.";
+  }
+  return summarizeImport({
+    imported: record.imported,
+    updated: record.updated,
+    unchanged: record.unchanged,
+    skipped: record.skipped,
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
+  if (bytes < 1_024 * 1_024 * 1_024) {
+    return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1_024 * 1_024 * 1_024)).toFixed(1)} GiB`;
 }
 
 function codexConnectionStatus(preview: CodexConnectionPreview | undefined): string {
@@ -205,6 +237,12 @@ export function App() {
   const [receipts, setReceipts] = useState<DeletionReceiptView[]>([]);
   const [activity, setActivity] = useState<Activity>();
   const [progress, setProgress] = useState<ImportProgress>();
+  const [directoryImportPreflight, setDirectoryImportPreflight] = useState<
+    Extract<PrepareDirectoryImportResponse, { status: "ready" }>
+  >();
+  const [directoryDialogBusy, setDirectoryDialogBusy] = useState(false);
+  const directoryFlowLock = useRef(false);
+  const [importReport, setImportReport] = useState<DirectoryImportResultView>();
   const [selected, setSelected] = useState<FetchResponse>();
   const [purgePreview, setPurgePreview] = useState<SourcePurgePreview>();
   const [error, setError] = useState<string>();
@@ -262,56 +300,186 @@ export function App() {
     }
   }, [view]);
 
-  async function handleImport() {
-    setActivity("import");
+  async function runDirectoryPreflight() {
+    setDirectoryImportPreflight(undefined);
+    setActivity("preflight");
     setProgress(undefined);
     setError(undefined);
 
     try {
-      const response = await window.ownContext.importDirectory();
-      if (response.aborted) {
-        setNotice("Import canceled. The previous complete vault state was preserved.");
-      } else if (!response.canceled) {
-        setNotice(summarizeImport(response.result));
-        setHasSearched(false);
-        setResults([]);
-        await Promise.all([refreshSources(), refreshReceipts()]);
+      const response = await window.ownContext.prepareDirectoryImport();
+      switch (response.status) {
+        case "ready":
+          setDirectoryImportPreflight(response);
+          setNotice("Folder scan complete. Review the scope before importing.");
+          break;
+        case "canceled":
+          setNotice("Folder selection canceled. Nothing was imported.");
+          break;
+        case "aborted":
+          setNotice("Folder scan canceled. Nothing was imported.");
+          break;
+        case "busy":
+          setNotice("Wait for the current import or scan to finish.");
+          break;
+        case "failed":
+          setError("OwnContext could not inspect that folder safely. Check access and try again.");
+          break;
       }
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError("OwnContext could not start the folder scan safely. Try again.");
     } finally {
       setActivity(undefined);
       setProgress(undefined);
     }
   }
 
+  async function handleImport() {
+    if (directoryFlowLock.current) return;
+    directoryFlowLock.current = true;
+    try {
+      await runDirectoryPreflight();
+    } finally {
+      directoryFlowLock.current = false;
+    }
+  }
+
+  async function confirmDirectoryImport() {
+    const preflight = directoryImportPreflight;
+    if (!preflight || directoryFlowLock.current) return;
+    directoryFlowLock.current = true;
+    setDirectoryDialogBusy(true);
+    setActivity("import");
+    setProgress(undefined);
+    setError(undefined);
+    try {
+      const response = await window.ownContext.confirmDirectoryImport(
+        preflight.token,
+      );
+      switch (response.status) {
+        case "imported":
+          setDirectoryImportPreflight(undefined);
+          if (response.replayed) {
+            setNotice("That preview was already used. Scan the folder again to refresh it.");
+          } else {
+            setImportReport(response.result);
+            setNotice(summarizeImport(response.result));
+            setHasSearched(false);
+            setResults([]);
+            await Promise.all([refreshSources(), refreshReceipts()]);
+          }
+          break;
+        case "stale-scan":
+          setDirectoryImportPreflight(undefined);
+          setNotice("The folder changed after the preview. Scan it again before importing.");
+          break;
+        case "expired":
+          setDirectoryImportPreflight(undefined);
+          setNotice("The five-minute preview expired. Scan the folder again.");
+          break;
+        case "invalid":
+          setDirectoryImportPreflight(undefined);
+          setNotice("That import preview is no longer valid. Scan the folder again.");
+          break;
+        case "aborted":
+          setDirectoryImportPreflight(undefined);
+          setNotice("Import canceled. The previous complete vault state was preserved.");
+          break;
+        case "busy":
+          setNotice("Wait for the current import or scan to finish.");
+          break;
+        case "failed":
+          setDirectoryImportPreflight(undefined);
+          setError("OwnContext could not complete that import safely. Scan the folder again.");
+          break;
+      }
+    } catch {
+      setDirectoryImportPreflight(undefined);
+      setError("OwnContext could not complete that import safely. Scan the folder again.");
+    } finally {
+      setActivity(undefined);
+      setProgress(undefined);
+      setDirectoryDialogBusy(false);
+      directoryFlowLock.current = false;
+    }
+  }
+
+  async function cancelDirectoryImport() {
+    const preflight = directoryImportPreflight;
+    if (!preflight || directoryFlowLock.current) return;
+    directoryFlowLock.current = true;
+    setDirectoryDialogBusy(true);
+    setDirectoryImportPreflight(undefined);
+    setError(undefined);
+    try {
+      const response = await window.ownContext.cancelDirectoryImport(
+        preflight.token,
+      );
+      setNotice(response.status === "imported"
+        ? "That preview was already used. No additional import was started."
+        : "Import preview canceled. Nothing was imported.");
+    } catch {
+      setError("OwnContext could not close that preview cleanly. No import was started.");
+    } finally {
+      setDirectoryDialogBusy(false);
+      directoryFlowLock.current = false;
+    }
+  }
+
+  async function chooseAnotherDirectory() {
+    const preflight = directoryImportPreflight;
+    if (!preflight || directoryFlowLock.current) return;
+    directoryFlowLock.current = true;
+    setDirectoryDialogBusy(true);
+    setDirectoryImportPreflight(undefined);
+    setError(undefined);
+    try {
+      await window.ownContext.cancelDirectoryImport(preflight.token);
+      await runDirectoryPreflight();
+    } catch {
+      setError("OwnContext could not switch folders safely. Try again.");
+    } finally {
+      setDirectoryDialogBusy(false);
+      directoryFlowLock.current = false;
+    }
+  }
+
   async function handleImportSample() {
+    if (directoryFlowLock.current) return;
+    directoryFlowLock.current = true;
+    setDirectoryImportPreflight(undefined);
+    setImportReport(undefined);
     setActivity("import");
     setProgress(undefined);
     setError(undefined);
 
     try {
       const response = await window.ownContext.importSampleLibrary();
-      if (response.aborted) {
+      if (response.failed) {
+        setError("OwnContext could not import the sample safely. Try again.");
+      } else if (response.aborted) {
         setNotice("Sample import canceled. The previous complete vault state was preserved.");
       } else if (!response.canceled) {
-        setNotice(`${summarizeImport(response.result)} Try the suggested search.`);
+        setNotice(`${summarizeSampleImport(response.result)} Try the suggested search.`);
         setQuery(response.suggestedQuery ?? "weekly review");
         setHasSearched(false);
         setResults([]);
         await Promise.all([refreshSources(), refreshReceipts()]);
       }
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError("OwnContext could not import the sample safely. Try again.");
     } finally {
       setActivity(undefined);
       setProgress(undefined);
+      directoryFlowLock.current = false;
     }
   }
 
   async function handleCancelImport() {
     await window.ownContext.cancelImport();
-    setNotice("Cancel requested. Rolling back the current import…");
+    setNotice(activity === "preflight"
+      ? "Cancel requested. Stopping the folder scan…"
+      : "Cancel requested. Rolling back the current import…");
   }
 
   async function handleSearch(event: FormEvent) {
@@ -434,7 +602,7 @@ export function App() {
     }
   }
 
-  const isImporting = activity === "import";
+  const isFolderWork = activity === "preflight" || activity === "import";
 
   return (
     <div className="shell">
@@ -487,9 +655,9 @@ export function App() {
             </h1>
           </div>
           {view === "library" ? (
-            isImporting ? (
+            isFolderWork ? (
               <button className="secondary danger" type="button" onClick={handleCancelImport}>
-                Cancel import
+                {activity === "preflight" ? "Cancel scan" : "Cancel import"}
               </button>
             ) : (
               <button
@@ -519,7 +687,7 @@ export function App() {
         {view === "library" ? (
           <LibraryView
             activity={activity}
-            notice={isImporting ? progressText(progress) : notice}
+            notice={isFolderWork ? progressText(progress) : notice}
             query={query}
             results={results}
             receipts={receipts}
@@ -529,6 +697,9 @@ export function App() {
             codexStatus={codexConnection?.status}
             claudeCodeStatus={claudeCodeConnection?.status}
             purgePreview={purgePreview}
+            directoryImportPreflight={directoryImportPreflight}
+            directoryDialogBusy={directoryDialogBusy}
+            importReport={importReport}
             onFetch={handleFetch}
             onBeginSourcePurge={beginSourcePurge}
             onCancelSourcePurge={() => setPurgePreview(undefined)}
@@ -537,6 +708,11 @@ export function App() {
             onSearch={handleSearch}
             onImportFolder={handleImport}
             onImportSample={handleImportSample}
+            onConfirmDirectoryImport={confirmDirectoryImport}
+            onCancelDirectoryImport={cancelDirectoryImport}
+            onChooseAnotherDirectory={chooseAnotherDirectory}
+            onCancelActiveImport={handleCancelImport}
+            onDismissImportReport={() => setImportReport(undefined)}
             onOpenConnections={() => setView("connections")}
             onCloseSelected={() => setSelected(undefined)}
           />
@@ -571,6 +747,11 @@ interface LibraryViewProps {
   codexStatus: CodexConnectionPreview["status"] | undefined;
   claudeCodeStatus: ClaudeCodeConnectionPreview["status"] | undefined;
   purgePreview: SourcePurgePreview | undefined;
+  directoryImportPreflight:
+    | Extract<PrepareDirectoryImportResponse, { status: "ready" }>
+    | undefined;
+  directoryDialogBusy: boolean;
+  importReport: DirectoryImportResultView | undefined;
   onFetch: (result: Result) => void;
   onBeginSourcePurge: (source: VaultSource) => void;
   onCancelSourcePurge: () => void;
@@ -579,11 +760,27 @@ interface LibraryViewProps {
   onSearch: (event: FormEvent) => void;
   onImportFolder: () => void;
   onImportSample: () => void;
+  onConfirmDirectoryImport: () => void;
+  onCancelDirectoryImport: () => void;
+  onChooseAnotherDirectory: () => void;
+  onCancelActiveImport: () => void;
+  onDismissImportReport: () => void;
   onOpenConnections: () => void;
   onCloseSelected: () => void;
 }
 
 function LibraryView(props: LibraryViewProps) {
+  const preflightDialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = preflightDialogRef.current;
+    if (props.directoryImportPreflight && dialog && !dialog.open) {
+      dialog.showModal();
+    }
+    return () => {
+      if (dialog?.open) dialog.close();
+    };
+  }, [props.directoryImportPreflight]);
+
   const documentCount = props.sources.reduce(
     (total, source) => total + source.documentCount,
     0,
@@ -617,6 +814,39 @@ function LibraryView(props: LibraryViewProps) {
           {props.activity === "search" ? "Searching…" : "Search"}
         </button>
       </form>
+
+      {props.importReport ? (
+        <section className="import-report" aria-label="Latest folder import report">
+          <div className="import-report-heading">
+            <div>
+              <p className="eyebrow">LATEST FOLDER IMPORT</p>
+              <h3>{props.importReport.skipped > 0
+                ? "Imported with files that need attention"
+                : "Folder import completed"}</h3>
+              <p>{summarizeImport(props.importReport)}</p>
+            </div>
+            <button className="secondary" type="button" onClick={props.onDismissImportReport}>
+              Dismiss
+            </button>
+          </div>
+          {props.importReport.issueExamples.length > 0 ? (
+            <ul className="issue-list">
+              {props.importReport.issueExamples.map((issue, index) => (
+                <li key={`${issue.code}-${issue.path}-${index}`}>
+                  <strong>{issue.path}</strong>
+                  <span>{issue.message}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {props.importReport.truncatedIssueCount > 0 ? (
+            <small>
+              {props.importReport.truncatedIssueCount} more skipped-file issue
+              {props.importReport.truncatedIssueCount === 1 ? "" : "s"} not shown.
+            </small>
+          ) : null}
+        </section>
+      ) : null}
 
       {onboarding.canContinueToConnections ? (
         <section className="setup-bridge" aria-label="Finish AI setup">
@@ -768,6 +998,147 @@ function LibraryView(props: LibraryViewProps) {
           <p className="source-uri">{props.selected.sourceUri}</p>
           <pre>{props.selected.content}</pre>
         </div>
+      ) : null}
+
+      {props.directoryImportPreflight ? (
+        <dialog
+          ref={preflightDialogRef}
+          className="preflight-dialog"
+          aria-labelledby="directory-import-preflight-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            if (props.activity === "import") {
+              void props.onCancelActiveImport();
+            } else if (!props.directoryDialogBusy) {
+              void props.onCancelDirectoryImport();
+            }
+          }}
+        >
+            <p className="eyebrow">REVIEW BEFORE IMPORT</p>
+            <h3 id="directory-import-preflight-title">
+              Import “{props.directoryImportPreflight.folderLabel}”?
+            </h3>
+            <p className="preflight-summary">
+              OwnContext scanned this folder locally. Confirm the exact supported-file scope before
+              anything is added to your vault.
+            </p>
+
+            <dl className="preflight-stats">
+              <div>
+                <dt>Ready to import</dt>
+                <dd>{props.directoryImportPreflight.preview.candidateFileCount} files · {formatBytes(props.directoryImportPreflight.preview.candidateBytes)}</dd>
+              </div>
+              <div>
+                <dt>Visited entries</dt>
+                <dd>{props.directoryImportPreflight.preview.visitedEntryCount}</dd>
+              </div>
+              <div>
+                <dt>Unsupported files</dt>
+                <dd>{props.directoryImportPreflight.preview.unsupportedFileCount}</dd>
+              </div>
+              <div>
+                <dt>Oversized files</dt>
+                <dd>{props.directoryImportPreflight.preview.oversizedFileCount}</dd>
+              </div>
+              <div>
+                <dt>Rejected links</dt>
+                <dd>{props.directoryImportPreflight.preview.rejectedLinkCount}</dd>
+              </div>
+              <div>
+                <dt>Read errors</dt>
+                <dd>{props.directoryImportPreflight.preview.readErrorCount}</dd>
+              </div>
+            </dl>
+
+            <dl className="preflight-boundaries">
+              <div>
+                <dt>Supported content</dt>
+                <dd>Valid UTF-8 {props.directoryImportPreflight.preview.supportedExtensions.join(", ")} files only</dd>
+              </div>
+              <div>
+                <dt>Local destination</dt>
+                <dd>Collection “{props.directoryImportPreflight.preview.collection}”</dd>
+              </div>
+              <div>
+                <dt>Original folder</dt>
+                <dd>Files are read but never changed or deleted</dd>
+              </div>
+              <div>
+                <dt>Future AI access</dt>
+                <dd>Returned excerpts and provenance may leave this device through an authorized cloud AI</dd>
+              </div>
+            </dl>
+
+            {props.directoryImportPreflight.preview.unsupportedByExtension.length > 0 ? (
+              <p className="extension-summary">
+                Excluded by extension: {props.directoryImportPreflight.preview.unsupportedByExtension
+                  .map((item) => `${item.extension} (${item.count})`)
+                  .join(" · ")}
+              </p>
+            ) : null}
+
+            {props.directoryImportPreflight.preview.issueExamples.length > 0 ? (
+              <div className="preflight-issues">
+                <strong>Examples that will not be imported</strong>
+                <ul className="issue-list">
+                  {props.directoryImportPreflight.preview.issueExamples.map((issue, index) => (
+                    <li key={`${issue.code}-${issue.path}-${index}`}>
+                      <strong>{issue.path}</strong>
+                      <span>{issue.message}</span>
+                    </li>
+                  ))}
+                </ul>
+                {props.directoryImportPreflight.preview.truncatedIssueCount > 0 ? (
+                  <small>
+                    {props.directoryImportPreflight.preview.truncatedIssueCount} more issue
+                    {props.directoryImportPreflight.preview.truncatedIssueCount === 1 ? "" : "s"} not shown.
+                  </small>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!props.directoryImportPreflight.preview.canImport ? (
+              <p className="preflight-empty" role="status">
+                No supported file is ready. Choose a folder containing valid UTF-8 .md or .txt files.
+              </p>
+            ) : null}
+            <small className="preflight-expiry">
+              This in-memory preview expires after five minutes and can be used only once.
+              OwnContext checks the approved scope again before import and stops if it no longer matches.
+            </small>
+
+            <div className="preflight-actions">
+              <button
+                className="secondary"
+                type="button"
+                autoFocus
+                disabled={props.directoryDialogBusy && props.activity !== "import"}
+                onClick={props.activity === "import"
+                  ? props.onCancelActiveImport
+                  : props.onCancelDirectoryImport}
+              >
+                {props.activity === "import" ? "Cancel import" : "Cancel"}
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={props.directoryDialogBusy || props.activity !== undefined}
+                onClick={props.onChooseAnotherDirectory}
+              >
+                Choose another folder
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={props.directoryDialogBusy || props.activity !== undefined || !props.directoryImportPreflight.preview.canImport}
+                onClick={props.onConfirmDirectoryImport}
+              >
+                {props.activity === "import"
+                  ? "Importing…"
+                  : `Import ${props.directoryImportPreflight.preview.candidateFileCount} file${props.directoryImportPreflight.preview.candidateFileCount === 1 ? "" : "s"}`}
+              </button>
+            </div>
+        </dialog>
       ) : null}
 
       {props.purgePreview ? (

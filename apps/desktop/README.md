@@ -2,7 +2,8 @@
 
 This Electron workspace is the first end-user vertical slice. It can:
 
-- select a local folder and atomically import UTF-8 Markdown and text files;
+- select a local folder, review a bounded content-free scope preview, and then
+  atomically import eligible UTF-8 Markdown and text files;
 - show bounded, content-free import progress and cancel with a full rollback;
 - list source health and document counts;
 - search the local FTS index and inspect bounded document context;
@@ -31,6 +32,34 @@ single allowed collection, currently `default`, in the managed MCP environment;
 no vault path or collection grant is accepted from renderer input. The MCP
 server rejects a search request that names any other collection and permits
 `fetch` only for IDs issued on that connection.
+
+## Folder import boundary
+
+The main process owns the native folder picker and retains the canonical path
+during preflight. At that stage the renderer receives only the folder label,
+aggregate supported/excluded/too-large/link/read-error counts, extension totals,
+and bounded relative-path issue examples. Symbolic links, junctions, and
+multiply-linked files are excluded. A scan enumerates at most 100,000 filesystem
+entries by default. The preflight response contains no selected absolute path,
+raw operating-system errors, or file content. After a confirmed import, the
+renderer does receive persisted `file:` provenance URIs for source management
+and search citations; those paths can therefore be shown to the local user.
+
+Confirmation uses a cryptographically random, sender-bound, memory-only token
+that expires after five minutes and is single use. A new scan, cancellation,
+window close, or expiry drops the associated prepared scope. The core rescans
+before any vault write and compares canonical entry metadata plus SHA-256 hashes
+of valid supported files. A mismatch in that approved inventory produces a
+stale-scan result and leaves the database unchanged. Zero-candidate scans cannot
+be confirmed, and imports never modify the original files.
+
+The current Node implementation performs pathname-based traversal and checks
+the selected root identity before directories and again before commit. These
+checks detect observed changes but are not a handle-relative, atomic proof of
+ancestry against a malicious concurrent rename or reparse-point swap. Treat
+hostile or actively mutated folders as outside this developer preview's security
+boundary. Handle-relative traversal (or an equivalently reviewed native boundary)
+remains a public-release gate; use non-sensitive fixtures meanwhile.
 
 ## Built-in sample boundary
 
@@ -246,6 +275,13 @@ partitioning or an adequate non-interference test is a public-release gate.
 The packaged target is Windows x64. macOS support and numeric
 minimum/recommended hardware specifications remain deferred until packaged
 measurements exist.
+
+Folder import currently recognizes only valid UTF-8 `.md` and `.txt` files.
+HTML, JSON, CSV, and other formats are reported as excluded and remain planned.
+Re-import adds or revises files that are present, but it does not yet mirror
+deletions from the source folder: a previously indexed document that disappears
+from disk remains until its OwnContext source is removed. Explicit mirror versus
+snapshot semantics are a later milestone.
 
 Application-level vault and configuration-backup encryption, safe backup
 retention, authenticated client-executable discovery, signed installers and

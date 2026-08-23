@@ -2,7 +2,8 @@
 
 No open-source license has been selected yet.
 
-The project intends to become open source, but the maintainer has explicitly deferred the choice between a permissive license such as Apache-2.0 and a network-copyleft license such as AGPL-3.0.
+The project intends to become open source, but the maintainer has explicitly
+deferred both the decision and any narrowing of candidates.
 
 Until a `LICENSE` file is committed:
 

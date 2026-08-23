@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { existsSync, rmSync } from "node:fs";
+import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,6 +9,7 @@ import {
   HASH_ID_PATTERN,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
   OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
+  commitPreparedDirectoryImport,
   createNodeSqliteDevelopmentStorageProvider,
   deterministicId,
   fetchDocument,
@@ -17,6 +18,7 @@ import {
   listDeletionReceipts,
   listSources,
   openVault,
+  prepareDirectoryImport,
   prepareSourcePurge,
   purgeDocument,
   purgeSource,
@@ -25,6 +27,7 @@ import {
   type Vault,
   type ImportDirectoryOptions,
   type ImportProgress,
+  type PreparedDirectoryImport,
 } from "../src/index.js";
 
 const temporaryPaths: string[] = [];
@@ -55,6 +58,245 @@ describe("deterministic IDs", () => {
     expect(first).toBe(deterministicId("document", "ab", "c"));
     expect(first).not.toBe(deterministicId("document", "a", "bc"));
     expect(first).not.toBe(deterministicId("chunk", "ab", "c"));
+  });
+});
+
+describe("directory import preflight", () => {
+  it("reports common unsupported exports and refuses a zero-candidate commit", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "notion.html"), "notion export", "utf8");
+    await writeFile(join(root, "blog.json"), "blog export", "utf8");
+    await writeFile(join(root, "journal.csv"), "journal export", "utf8");
+
+    const prepared = await prepareDirectoryImport(root, {
+      collection: "personal",
+      sourceName: "Personal exports",
+    });
+
+    expect(prepared.preview).toMatchObject({
+      schemaVersion: 1,
+      sourceName: "Personal exports",
+      collection: "personal",
+      supportedExtensions: [".md", ".txt"],
+      visitedEntryCount: 3,
+      candidateFileCount: 0,
+      candidateBytes: 0,
+      unsupportedFileCount: 3,
+      oversizedFileCount: 0,
+      rejectedLinkCount: 0,
+      readErrorCount: 0,
+      unsupportedByExtension: [
+        { extension: ".csv", count: 1 },
+        { extension: ".html", count: 1 },
+        { extension: ".json", count: 1 },
+      ],
+      truncatedIssueCount: 0,
+      canImport: false,
+    });
+    expect(prepared.preview.issueExamples.map((issue) => issue.path).sort()).toEqual([
+      "blog.json",
+      "journal.csv",
+      "notion.html",
+    ]);
+    expect(prepared.preview.issueExamples.every((issue) =>
+      issue.code === "unsupported-file" && issue.message === "File type is not supported."
+    )).toBe(true);
+
+    await expect(commitPreparedDirectoryImport(vault, prepared)).rejects.toThrow(
+      "Prepared directory import has no candidate files",
+    );
+    expect(listSources(vault)).toEqual([]);
+  });
+
+  it("bounds unsupported extension groups and issue examples", async () => {
+    const { root } = await fixture();
+    for (let index = 0; index < 30; index += 1) {
+      await writeFile(join(root, `unsupported-${index}.type${index}`), "excluded", "utf8");
+    }
+
+    const prepared = await prepareDirectoryImport(root);
+    expect(prepared.preview.unsupportedFileCount).toBe(30);
+    expect(prepared.preview.unsupportedByExtension.length).toBeLessThanOrEqual(16);
+    expect(prepared.preview.unsupportedByExtension.reduce(
+      (total, item) => total + item.count,
+      0,
+    )).toBe(30);
+    expect(prepared.preview.issueExamples).toHaveLength(20);
+    expect(prepared.preview.truncatedIssueCount).toBe(10);
+  });
+
+  it("fails closed when the all-entry traversal bound is exceeded", async () => {
+    const { root } = await fixture();
+    for (let index = 0; index < 6; index += 1) {
+      await writeFile(join(root, `unsupported-${index}.bin`), "excluded", "utf8");
+    }
+
+    await expect(prepareDirectoryImport(root, { maxEntries: 5, maxFiles: 1 }))
+      .rejects.toThrow("Import exceeds the maxEntries limit of 5");
+  });
+
+  it("rejects multiply-linked files even when the other name is outside the root", async () => {
+    const { root, vault } = await fixture();
+    const outsideFile = join(dirname(root), "outside-hardlink.md");
+    await writeFile(outsideFile, "outside hardlink canary", "utf8");
+    await link(outsideFile, join(root, "alias.md"));
+
+    const prepared = await prepareDirectoryImport(root);
+    expect(prepared.preview).toMatchObject({
+      candidateFileCount: 0,
+      rejectedLinkCount: 1,
+      canImport: false,
+    });
+    expect(prepared.preview.issueExamples).toEqual([
+      {
+        code: "hardlink",
+        path: "alias.md",
+        message: "Files with multiple hard links are not imported.",
+      },
+    ]);
+    await expect(commitPreparedDirectoryImport(vault, prepared)).rejects.toThrow(
+      "Prepared directory import has no candidate files",
+    );
+    expect(searchVault(vault, { query: "outside hardlink canary" })).toEqual([]);
+    expect(listSources(vault)).toEqual([]);
+  });
+
+  it("keeps an unreadable nested directory path relative and continues the preview", async () => {
+    const { root } = await fixture();
+    const nested = join(root, "nested-private-name");
+    await mkdir(nested);
+    await writeFile(join(nested, "inside.md"), "removed before traversal", "utf8");
+    await writeFile(join(root, "z-note.md"), "still importable", "utf8");
+    let removed = false;
+
+    const prepared = await prepareDirectoryImport(root, {
+      onProgress: (progress) => {
+        if (!removed && progress.phase === "discovering" && progress.processed === 1) {
+          removed = true;
+          rmSync(nested, { recursive: true, force: true });
+        }
+      },
+    });
+
+    expect(removed).toBe(true);
+    expect(prepared.preview).toMatchObject({
+      candidateFileCount: 1,
+      readErrorCount: 1,
+      canImport: true,
+    });
+    expect(prepared.preview.issueExamples).toContainEqual({
+      code: "read-error",
+      path: "nested-private-name",
+      message: "Entry could not be inspected safely.",
+    });
+    expect(JSON.stringify(prepared.preview)).not.toContain(root);
+  });
+
+  it("returns a bounded mixed-folder preview and commits the exact approved scope", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "note.md"), "okay", "utf8");
+    await writeFile(join(root, "large.txt"), "12345", "utf8");
+    await writeFile(join(root, "archive.html"), "ignored", "utf8");
+    const outside = join(dirname(root), "preflight-outside");
+    await mkdir(outside);
+    let linked = true;
+    try {
+      await symlink(outside, join(root, "linked"), process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      linked = false;
+    }
+
+    const prepared = await prepareDirectoryImport(root, { maxFileBytes: 4 });
+    expect(prepared.preview).toMatchObject({
+      candidateFileCount: 1,
+      candidateBytes: 4,
+      unsupportedFileCount: 1,
+      oversizedFileCount: 1,
+      rejectedLinkCount: linked ? 1 : 0,
+      readErrorCount: 0,
+      canImport: true,
+    });
+    expect(prepared.preview.visitedEntryCount).toBe(linked ? 4 : 3);
+    expect(prepared.preview.unsupportedByExtension).toEqual([
+      { extension: ".html", count: 1 },
+    ]);
+    expect(prepared.preview.issueExamples.length).toBe(linked ? 3 : 2);
+    expect(prepared.preview.issueExamples.every((issue) =>
+      !issue.path.includes(root) && !issue.message.includes(root)
+    )).toBe(true);
+
+    const result = await commitPreparedDirectoryImport(vault, prepared);
+    expect(result).toMatchObject({
+      scanned: 2,
+      imported: 1,
+      updated: 0,
+      unchanged: 0,
+      skipped: linked ? 2 : 1,
+    });
+    expect(result.documents.map((document) => document.relativePath)).toEqual(["note.md"]);
+    expect(listSources(vault)[0]?.documentCount).toBe(1);
+  });
+
+  it("rejects added, renamed, and byte-changed scopes without changing the vault", async () => {
+    const cases: Array<{
+      name: string;
+      mutate: (root: string) => Promise<unknown>;
+    }> = [
+      {
+        name: "added",
+        mutate: (root) => writeFile(join(root, "added.md"), "added", "utf8"),
+      },
+      {
+        name: "renamed",
+        mutate: (root) => rename(join(root, "one.md"), join(root, "renamed.md")),
+      },
+      {
+        name: "byte-changed",
+        mutate: (root) => writeFile(join(root, "one.md"), "bravo", "utf8"),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { root, vault } = await fixture();
+      await writeFile(join(root, "one.md"), "alpha", "utf8");
+      const prepared = await prepareDirectoryImport(root);
+      await testCase.mutate(root);
+
+      await expect(commitPreparedDirectoryImport(vault, prepared), testCase.name)
+        .rejects.toMatchObject({ code: "IMPORT_SCOPE_CHANGED" });
+      expect(listSources(vault), testCase.name).toEqual([]);
+    }
+  });
+
+  it("rejects a structurally forged prepared object", async () => {
+    const { root, vault } = await fixture();
+    await writeFile(join(root, "one.md"), "forgery boundary", "utf8");
+    const authentic = await prepareDirectoryImport(root);
+    const forged = { preview: authentic.preview } as PreparedDirectoryImport;
+
+    await expect(commitPreparedDirectoryImport(vault, forged)).rejects.toThrow(
+      "prepared must be returned by prepareDirectoryImport",
+    );
+    expect(listSources(vault)).toEqual([]);
+  });
+
+  it("exposes only a frozen, content-free preview and commits an unchanged scan", async () => {
+    const { root, vault } = await fixture();
+    const canary = "preflight-body-must-not-be-retained";
+    await writeFile(join(root, "one.md"), canary, "utf8");
+    const prepared = await prepareDirectoryImport(root);
+    const serialized = JSON.stringify(prepared);
+
+    expect(Object.keys(prepared)).toEqual(["preview"]);
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(prepared.preview)).toBe(true);
+    expect(serialized).not.toContain(canary);
+    expect(serialized).not.toContain(root);
+
+    const result = await commitPreparedDirectoryImport(vault, prepared);
+    expect(result).toMatchObject({ imported: 1, updated: 0, unchanged: 0, skipped: 0 });
+    expect(searchVault(vault, { query: "preflight-body" })).toHaveLength(1);
   });
 });
 

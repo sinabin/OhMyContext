@@ -15,6 +15,8 @@ export interface ImportDirectoryOptions {
   maxFileBytes?: number;
   /** Maximum number of supported files inspected in one import. */
   maxFiles?: number;
+  /** Maximum number of filesystem entries visited in one import. Defaults to 100,000. */
+  maxEntries?: number;
   /** Approximate maximum characters in a chunk. Defaults to 1,400. */
   chunkSize?: number;
   /** Cancels discovery or import. Cancellation rolls back the complete import. */
@@ -37,6 +39,7 @@ export interface ImportProgress {
 }
 
 export type ImportIssueCode =
+  | "hardlink"
   | "invalid-utf8"
   | "outside-root"
   | "read-error"
@@ -69,6 +72,67 @@ export interface ImportDirectoryResult {
   documents: ImportedDocument[];
   issues: ImportIssue[];
 }
+
+export interface DirectoryImportUnsupportedExtension {
+  extension: string;
+  count: number;
+}
+
+export type DirectoryImportPreviewIssueCode =
+  | "hardlink"
+  | "invalid-utf8"
+  | "outside-root"
+  | "read-error"
+  | "symlink"
+  | "too-large"
+  | "unsupported-file";
+
+/** Content-free, bounded example of an entry excluded by a directory scan. */
+export interface DirectoryImportPreviewIssue {
+  code: DirectoryImportPreviewIssueCode;
+  /** NFC-normalized path relative to the selected directory; never absolute. */
+  path: string;
+  /** Stable product copy. Raw operating-system error text is never exposed. */
+  message: string;
+}
+
+/**
+ * Public, content-free result of a directory import preflight. The preview is
+ * informational; commit authorization is held by the opaque prepared object,
+ * not by any of these caller-visible values.
+ */
+export interface DirectoryImportPreview {
+  schemaVersion: 1;
+  sourceName: string;
+  collection: string;
+  supportedExtensions: readonly string[];
+  visitedEntryCount: number;
+  candidateFileCount: number;
+  candidateBytes: number;
+  unsupportedFileCount: number;
+  oversizedFileCount: number;
+  rejectedLinkCount: number;
+  readErrorCount: number;
+  unsupportedByExtension: readonly DirectoryImportUnsupportedExtension[];
+  issueExamples: readonly DirectoryImportPreviewIssue[];
+  truncatedIssueCount: number;
+  canImport: boolean;
+}
+
+/**
+ * Opaque in-process capability returned only by `prepareDirectoryImport`.
+ * Implementations expose the preview while retaining the canonical root and
+ * inventory fingerprint in private state.
+ */
+export interface PreparedDirectoryImport {
+  readonly preview: DirectoryImportPreview;
+}
+
+/** Import-time controls that cannot alter the scope approved by preflight. */
+export type CommitPreparedDirectoryImportOptions = Pick<
+  ImportDirectoryOptions,
+  "signal" | "onProgress"
+>;
 
 export interface SearchVaultInput {
   query: string;

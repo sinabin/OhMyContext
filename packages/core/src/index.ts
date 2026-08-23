@@ -13,12 +13,15 @@ export type {
   VaultStorageValue,
 } from "./storage.js";
 export {
+  commitPreparedDirectoryImport,
+  DirectoryImportScopeChangedError,
   fetchDocument,
   importDirectory,
   importOwnContextSampleLibrary,
   listDeletionReceipts,
   listSources,
   openVault,
+  prepareDirectoryImport,
   prepareSourcePurge,
   purgeDocument,
   purgeSource,
@@ -36,8 +39,13 @@ export {
 } from "./sample.js";
 export type { OwnContextSampleLibraryFile } from "./sample.js";
 export type {
+  CommitPreparedDirectoryImportOptions,
   DeletionReceipt,
   DeletionReceiptVerification,
+  DirectoryImportPreview,
+  DirectoryImportPreviewIssue,
+  DirectoryImportPreviewIssueCode,
+  DirectoryImportUnsupportedExtension,
   FetchDocumentInput,
   FetchedChunk,
   ImportDirectoryOptions,
@@ -47,6 +55,7 @@ export type {
   ImportedDocument,
   ImportIssue,
   ImportIssueCode,
+  PreparedDirectoryImport,
   PrepareSourcePurgeResult,
   PurgeSourceInput,
   PurgeSourceResult,

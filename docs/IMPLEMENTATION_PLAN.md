@@ -74,21 +74,23 @@ a Milestone 6 public-release gate.
 
 ## Milestone 3 — Consumer desktop alpha
 
-Status: in progress — the developer alpha, built-in sample onboarding,
-source-removal flow, reversible Codex configuration, user-scoped Claude Code
-configuration, and an unsigned Windows x64 Squirrel developer-preview installer
-are implemented. The packaged GUI smoke now follows the built-in sample through
-search and the read-only AI Connections preview, and a read-only Windows alpha
-workflow verifies a source-bound draft release bundle without creating a public
-release. A clean-machine Setup install/uninstall exercise, actual packaged
-client-connection mutation, non-developer usability evidence, a signed public
-candidate, and a verified update channel remain outstanding.
+Status: in progress — the developer alpha, content-free folder preflight,
+built-in sample onboarding, source-removal flow, reversible Codex configuration,
+user-scoped Claude Code configuration, and an unsigned Windows x64 Squirrel
+developer-preview installer are implemented. The packaged GUI smoke now follows
+the built-in sample through search and the read-only AI Connections preview, and
+a read-only Windows alpha workflow verifies a source-bound draft release bundle
+without creating a public release. A clean-machine Setup install/uninstall
+exercise, actual packaged client-connection mutation, non-developer usability
+evidence, a signed public candidate, and a verified update channel remain
+outstanding.
 
 Deliverables:
 
 - Electron desktop shell with a replaceable core boundary.
-- Folder picker, import progress, source health, local search, source removal,
-  and result provenance.
+- Folder picker, bounded content-free scope preview, single-use main-process
+  confirmation, stale-folder refusal, import progress, source health, local
+  search, source removal, and result provenance.
 - Main-process-only built-in sample materialization with virtual
   `owncontext-sample://library/v1/` provenance; the renderer supplies neither a
   path nor a provenance override.
@@ -108,7 +110,9 @@ Deliverables:
 
 Acceptance:
 
-- A non-developer can install, import a folder, find a document, and configure one supported MCP client without a terminal or API key.
+- A non-developer can install, review what a folder scan will include and
+  exclude, import it, find a document, and configure one supported MCP client
+  without a terminal or API key.
 - Configuration changes are reversible.
 
 ## Milestone 4 — Portable context assets
@@ -171,6 +175,9 @@ Deliverables:
   unresolved archive/extraction advisories; accept an upgrade only after the
   complete Windows make and smoke matrix passes.
 - Cross-vault leakage, prompt-injection impact, deletion, export, and log regression suites.
+- Handle-relative folder traversal, or an equivalently reviewed native boundary,
+  that proves ancestry from the selected root under concurrent rename and
+  reparse-point changes; the current pathname checks remain fixture-only.
 - Collection-partitioned FTS candidate generation, or release evidence that
   global-candidate work, caches, resource use, and timing do not create an
   unacceptable cross-collection side channel.

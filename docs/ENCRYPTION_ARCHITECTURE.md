@@ -12,8 +12,9 @@ acceptance test in this document passes on the packaged application.
 
 macOS support, numeric minimum/recommended hardware specifications, the project
 license, and the final encrypted-SQLite provider are deliberately not decided
-here. Provider licensing must be reviewed together with the pending
-Apache-2.0-versus-AGPL project-license decision before a dependency is shipped.
+here. Provider licensing must be reviewed together with the still-open project
+license decision before a dependency is shipped; no project-license candidates
+are shortlisted by this architecture.
 
 ## Decision
 

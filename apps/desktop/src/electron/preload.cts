@@ -2,7 +2,12 @@ const { contextBridge, ipcRenderer } = require("electron") as typeof import("ele
 
 const api = {
   getStatus: () => ipcRenderer.invoke("vault:status") as Promise<VaultStatus>,
-  importDirectory: () => ipcRenderer.invoke("vault:import-directory") as Promise<ImportResponse>,
+  prepareDirectoryImport: () =>
+    ipcRenderer.invoke("vault:prepare-directory-import") as Promise<PrepareDirectoryImportResponse>,
+  confirmDirectoryImport: (token: string) =>
+    ipcRenderer.invoke("vault:confirm-directory-import", token) as Promise<ConfirmDirectoryImportResponse>,
+  cancelDirectoryImport: (token: string) =>
+    ipcRenderer.invoke("vault:cancel-directory-import", token) as Promise<CancelDirectoryImportResponse>,
   importSampleLibrary: () =>
     ipcRenderer.invoke("vault:import-sample-library") as Promise<ImportResponse>,
   cancelImport: () => ipcRenderer.invoke("vault:cancel-import") as Promise<CancelImportResponse>,
@@ -50,11 +55,70 @@ export interface VaultStatus {
 export interface ImportResponse {
   canceled: boolean;
   aborted: boolean;
-  selectedPath?: string;
+  failed?: boolean;
   sample?: true;
   suggestedQuery?: string;
   result?: unknown;
 }
+
+export interface DirectoryImportIssueView {
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface DirectoryImportPreview {
+  schemaVersion: 1;
+  sourceName: string;
+  collection: string;
+  supportedExtensions: readonly [".md", ".txt"];
+  visitedEntryCount: number;
+  candidateFileCount: number;
+  candidateBytes: number;
+  unsupportedFileCount: number;
+  oversizedFileCount: number;
+  rejectedLinkCount: number;
+  readErrorCount: number;
+  unsupportedByExtension: ReadonlyArray<{
+    extension: string;
+    count: number;
+  }>;
+  issueExamples: readonly DirectoryImportIssueView[];
+  truncatedIssueCount: number;
+  canImport: boolean;
+}
+
+export type PrepareDirectoryImportResponse =
+  | {
+      status: "ready";
+      token: string;
+      folderLabel: string;
+      preview: DirectoryImportPreview;
+    }
+  | { status: "canceled" | "aborted" | "busy" | "failed" };
+
+export interface DirectoryImportResultView {
+  scanned: number;
+  imported: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  issueExamples: readonly DirectoryImportIssueView[];
+  truncatedIssueCount: number;
+}
+
+export type ConfirmDirectoryImportResponse =
+  | {
+      status: "imported";
+      replayed: false;
+      result: DirectoryImportResultView;
+    }
+  | { status: "imported"; replayed: true }
+  | { status: "stale-scan" | "expired" | "invalid" | "aborted" | "busy" | "failed" };
+
+export type CancelDirectoryImportResponse = {
+  status: "aborted" | "stale-scan" | "expired" | "invalid" | "imported";
+};
 
 export interface CancelImportResponse {
   requested: boolean;

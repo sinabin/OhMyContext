@@ -11,20 +11,29 @@ import {
 } from "electron";
 import {
   createNodeSqliteDevelopmentStorageProvider,
+  commitPreparedDirectoryImport,
+  DirectoryImportScopeChangedError,
   fetchDocument,
-  importDirectory,
   importOwnContextSampleLibrary,
   listDeletionReceipts,
   listSources,
   openVault,
+  prepareDirectoryImport,
   prepareSourcePurge,
   purgeSource,
   searchVault,
   verifyDeletionReceipt,
   type ImportProgress,
+  type PreparedDirectoryImport,
   type PurgeSourceInput,
   type Vault,
 } from "@owncontext/core";
+import {
+  DIRECTORY_IMPORT_TOKEN_TTL_MS,
+  DirectoryImportTokenManager,
+  isValidDirectoryImportToken,
+  renderImportResult,
+} from "./directory-import-preflight.js";
 import {
   createCodexConfigService,
   type CodexConfigService,
@@ -60,8 +69,10 @@ import {
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 let vault: Vault | undefined;
 let activeImport: AbortController | undefined;
+let folderSelectionActive = false;
 let quitAfterImport = false;
 let trustedRendererWebContentsId: number | undefined;
+const directoryImportTokens = new DirectoryImportTokenManager<PreparedDirectoryImport>();
 
 function rendererEntryPath(): string {
   return join(moduleDirectory, "../dist/renderer/index.html");
@@ -121,19 +132,22 @@ function ownContextMcpLaunch(): OwnContextMcpLaunch & ClaudeCodeMcpLaunch {
   };
 }
 
-interface VaultImportOptions {
-  collection?: string;
-  sourceName?: string;
-  exposeSelectedPath?: boolean;
-  sample?: boolean;
-  suggestedQuery?: string;
-  builtInSample?: true;
+function isAbortFailure(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted && (
+    error === signal.reason ||
+    (
+      typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "AbortError"
+    )
+  );
 }
 
-async function runVaultImport(
+async function runSampleVaultImport(
   event: IpcMainInvokeEvent,
   selectedPath: string,
-  options: VaultImportOptions = {},
+  suggestedQuery: string,
 ) {
   if (activeImport) {
     throw new Error("An import is already running.");
@@ -141,53 +155,145 @@ async function runVaultImport(
 
   const controller = new AbortController();
   activeImport = controller;
-  const publicMetadata = {
-    ...(options.exposeSelectedPath === false ? {} : { selectedPath }),
-    ...(options.sample === true ? { sample: true as const } : {}),
-    ...(options.suggestedQuery ? { suggestedQuery: options.suggestedQuery } : {}),
-  };
-
   try {
     const onProgress = (progress: ImportProgress): void => {
       if (!event.sender.isDestroyed()) {
         event.sender.send("vault:import-progress", progress);
       }
     };
-    const result = options.builtInSample
-      ? await importOwnContextSampleLibrary(requireVault(), selectedPath, {
-          signal: controller.signal,
-          onProgress,
-        })
-      : await importDirectory(requireVault(), selectedPath, {
-          ...(options.collection ? { collection: options.collection } : {}),
-          ...(options.sourceName ? { sourceName: options.sourceName } : {}),
-          signal: controller.signal,
-          onProgress,
-        });
+    const result = await importOwnContextSampleLibrary(requireVault(), selectedPath, {
+      signal: controller.signal,
+      onProgress,
+    });
     return {
       canceled: false as const,
       aborted: false as const,
-      ...publicMetadata,
+      sample: true as const,
+      suggestedQuery,
       result,
     };
   } catch (error) {
-    if (controller.signal.aborted) {
+    if (isAbortFailure(error, controller.signal)) {
       return {
         canceled: false as const,
         aborted: true as const,
-        ...publicMetadata,
+        sample: true as const,
+        suggestedQuery,
       };
     }
-    throw error;
+    return {
+      canceled: false as const,
+      aborted: false as const,
+      failed: true as const,
+      sample: true as const,
+      suggestedQuery,
+    };
   } finally {
     activeImport = undefined;
-    if (quitAfterImport) {
-      quitAfterImport = false;
-      closeVault();
-      app.quit();
-    } else if (BrowserWindow.getAllWindows().length === 0) {
-      closeVault();
+    finishDeferredQuitOrClose();
+  }
+}
+
+async function prepareFolderImport(
+  event: IpcMainInvokeEvent,
+  selectedPath: string,
+): Promise<
+  | {
+      status: "ready";
+      token: string;
+      folderLabel: string;
+      preview: PreparedDirectoryImport["preview"];
     }
+  | { status: "aborted" }
+  | { status: "failed" }
+> {
+  if (activeImport) throw new Error("An import or import scan is already running.");
+  const controller = new AbortController();
+  activeImport = controller;
+
+  try {
+    const prepared = await prepareDirectoryImport(selectedPath, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("vault:import-progress", progress);
+        }
+      },
+    });
+    if (controller.signal.aborted || event.sender.isDestroyed()) {
+      return { status: "aborted" };
+    }
+    const token = directoryImportTokens.issue(event.sender.id, prepared);
+    const expiryTimer = setTimeout(() => {
+      directoryImportTokens.expireIfDue(token);
+    }, DIRECTORY_IMPORT_TOKEN_TTL_MS);
+    expiryTimer.unref();
+    return {
+      status: "ready",
+      token,
+      folderLabel: prepared.preview.sourceName,
+      preview: prepared.preview,
+    };
+  } catch (error) {
+    if (isAbortFailure(error, controller.signal)) return { status: "aborted" };
+    return { status: "failed" };
+  } finally {
+    activeImport = undefined;
+    finishDeferredQuitOrClose();
+  }
+}
+
+async function commitPreparedFolderImport(
+  event: IpcMainInvokeEvent,
+  token: string,
+  prepared: PreparedDirectoryImport,
+) {
+  const controller = new AbortController();
+  activeImport = controller;
+  try {
+    const result = await commitPreparedDirectoryImport(requireVault(), prepared, {
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("vault:import-progress", progress);
+        }
+      },
+    });
+    directoryImportTokens.markImported(token);
+    return {
+      status: "imported" as const,
+      replayed: false as const,
+      result: renderImportResult(result),
+    };
+  } catch (error) {
+    if (error instanceof DirectoryImportScopeChangedError || (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "IMPORT_SCOPE_CHANGED"
+    )) {
+      directoryImportTokens.markStale(token);
+      return { status: "stale-scan" as const };
+    }
+    if (isAbortFailure(error, controller.signal)) {
+      directoryImportTokens.markAborted(token);
+      return { status: "aborted" as const };
+    }
+    directoryImportTokens.markAborted(token);
+    return { status: "failed" as const };
+  } finally {
+    activeImport = undefined;
+    finishDeferredQuitOrClose();
+  }
+}
+
+function finishDeferredQuitOrClose(): void {
+  if (quitAfterImport) {
+    quitAfterImport = false;
+    closeVault();
+    app.quit();
+  } else if (BrowserWindow.getAllWindows().length === 0) {
+    closeVault();
   }
 }
 
@@ -241,6 +347,7 @@ function createWindow(guiSmoke?: GuiSmokeContext): BrowserWindow {
     if (navigationUrl !== expectedUrl) event.preventDefault();
   });
   window.once("closed", () => {
+    directoryImportTokens.abortPendingForSender(windowWebContentsId);
     if (trustedRendererWebContentsId === windowWebContentsId) {
       trustedRendererWebContentsId = undefined;
     }
@@ -265,37 +372,64 @@ function startDesktopApp(
       };
     });
 
-    ipcMain.handle("vault:import-directory", async (event) => {
+    ipcMain.handle("vault:prepare-directory-import", async (event) => {
       const parentWindow = trustedWindowFor(event);
-      if (activeImport) {
-        throw new Error("An import is already running.");
+      if (activeImport || folderSelectionActive) {
+        return { status: "busy" as const };
       }
+      directoryImportTokens.abortPendingForSender(event.sender.id);
+      folderSelectionActive = true;
+      try {
+        const selection = await dialog.showOpenDialog(parentWindow, {
+          title: "Choose a folder you are authorized to import",
+          properties: ["openDirectory"],
+        });
 
-      const selection = await dialog.showOpenDialog(parentWindow, {
-        title: "Choose a folder you are authorized to import",
-        properties: ["openDirectory"],
-      });
-
-      const selectedPath = selection.filePaths[0];
-      if (selection.canceled || !selectedPath) {
-        return { canceled: true, aborted: false };
+        const selectedPath = selection.filePaths[0];
+        if (selection.canceled || !selectedPath) {
+          return { status: "canceled" as const };
+        }
+        if (activeImport) return { status: "busy" as const };
+        return prepareFolderImport(event, selectedPath);
+      } finally {
+        folderSelectionActive = false;
       }
+    });
 
-      return runVaultImport(event, selectedPath);
+    ipcMain.handle("vault:confirm-directory-import", async (event, token: unknown) => {
+      trustedWindowFor(event);
+      if (activeImport || folderSelectionActive) return { status: "busy" as const };
+      const confirmation = directoryImportTokens.takeForConfirmation(token, event.sender.id);
+      if (confirmation.status !== "ready") {
+        return confirmation.status === "imported"
+          ? { status: "imported" as const, replayed: true as const }
+          : { status: confirmation.status };
+      }
+      if (!isValidDirectoryImportToken(token)) {
+        // The manager can return ready only for a valid token. Keep this local
+        // assertion so no unvalidated renderer value reaches lifecycle methods.
+        throw new Error("Validated directory import token was lost.");
+      }
+      if (!confirmation.prepared.preview.canImport) {
+        directoryImportTokens.markAborted(token);
+        return { status: "aborted" as const };
+      }
+      return commitPreparedFolderImport(event, token, confirmation.prepared);
+    });
+
+    ipcMain.handle("vault:cancel-directory-import", (event, token: unknown) => {
+      trustedWindowFor(event);
+      return directoryImportTokens.cancel(token, event.sender.id);
     });
 
     ipcMain.handle("vault:import-sample-library", async (event) => {
       trustedWindowFor(event);
-      if (activeImport) {
+      if (activeImport || folderSelectionActive) {
         throw new Error("An import is already running.");
       }
+      directoryImportTokens.abortPendingForSender(event.sender.id);
       const sample = await materializeSampleLibrary(app.getPath("userData"));
-      return runVaultImport(event, sample.directoryPath, {
-        exposeSelectedPath: false,
-        sample: true,
-        suggestedQuery: sample.suggestedQuery,
-        builtInSample: true,
-      });
+      return runSampleVaultImport(event, sample.directoryPath, sample.suggestedQuery);
     });
 
     ipcMain.handle("vault:cancel-import", (event) => {
@@ -447,6 +581,7 @@ function startDesktopApp(
   });
 
   app.on("before-quit", (event) => {
+    directoryImportTokens.abortAll();
     if (activeImport) {
       event.preventDefault();
       quitAfterImport = true;
@@ -455,6 +590,7 @@ function startDesktopApp(
   });
 
   app.on("window-all-closed", () => {
+    directoryImportTokens.abortAll();
     activeImport?.abort();
     if (!activeImport) closeVault();
 
