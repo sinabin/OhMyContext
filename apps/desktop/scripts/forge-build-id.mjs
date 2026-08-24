@@ -6,7 +6,7 @@ const BUILD_ID_PATTERN =
 export function validateForgeBuildIdentifier(value) {
   if (typeof value !== "string" || !BUILD_ID_PATTERN.test(value)) {
     throw new Error(
-      `${FORGE_BUILD_ID_ENV} must be an unsigned-* identifier containing only ASCII letters, digits, underscores, and hyphens.`,
+      `${FORGE_BUILD_ID_ENV} must be an unsigned-* or public-* identifier containing only ASCII letters, digits, underscores, and hyphens.`,
     );
   }
   return value;

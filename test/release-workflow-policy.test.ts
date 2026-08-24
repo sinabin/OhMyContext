@@ -9,6 +9,13 @@ const workflowPath = resolve(
   "workflows",
   "alpha-ci.yml",
 );
+const publicWorkflowPath = resolve(
+  import.meta.dirname,
+  "..",
+  ".github",
+  "workflows",
+  "public-release.yml",
+);
 
 describe("unsigned alpha workflow policy", () => {
   it("has read-only repository permissions and no release mutation path", async () => {
@@ -40,5 +47,21 @@ describe("unsigned alpha workflow policy", () => {
     expect(workflow).toContain("if-no-files-found: error");
     expect(workflow).not.toContain("OWNCONTEXT-RELEASE-CANDIDATE.json");
     expect(workflow).toContain("${{ env.OWNCONTEXT_BUILD_DIR }}/evidence/*");
+  });
+
+  it("keeps the public workflow protected by a tag, signing inputs, and release gates", async () => {
+    const workflow = await readFile(publicWorkflowPath, "utf8");
+    expect(workflow).toContain('"v*.*.*"');
+    expect(workflow).toContain("permissions:\n  contents: write");
+    expect(workflow).toContain("environment: owncontext-public-release");
+    expect(workflow).toContain("OWNCONTEXT_SIGNING_CERTIFICATE_BASE64");
+    expect(workflow).toContain("OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD");
+    expect(workflow).toContain("node scripts/release-preflight.mjs --json");
+    expect(workflow).toContain("-ExecuteDisposableGitHubHostedLifecycle");
+    expect(workflow).toContain("gh release create");
+    const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gmu)].map((match) => match[1]);
+    for (const action of uses) {
+      expect(action).toMatch(/^[\w-]+\/[\w-]+@[0-9a-f]{40}$/u);
+    }
   });
 });

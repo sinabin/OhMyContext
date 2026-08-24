@@ -1,0 +1,111 @@
+name: OwnContext public release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact non-placeholder semver to release"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: owncontext-public-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-public:
+    name: Build, sign, and verify Windows public release
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: owncontext-public-release
+    steps:
+      - name: Require a disposable GitHub-hosted Windows runner
+        if: ${{ runner.environment != 'github-hosted' }}
+        shell: pwsh
+        run: throw 'This workflow may run only on a GitHub-hosted disposable windows-latest runner.'
+
+      - name: Check out the tagged source revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Use the supported Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Decode the protected Authenticode certificate
+        shell: pwsh
+        env:
+          OWNCONTEXT_SIGNING_CERTIFICATE_BASE64: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OWNCONTEXT_SIGNING_CERTIFICATE_BASE64)) {
+            throw 'The protected Authenticode certificate secret is missing.'
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'owncontext-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:OWNCONTEXT_SIGNING_CERTIFICATE_BASE64))
+          "OWNCONTEXT_SIGNING_CERTIFICATE_FILE=$certificatePath" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run source and protocol verification
+        run: npm run check
+
+      - name: Run the release preflight before any artifact is published
+        shell: pwsh
+        env:
+          OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
+          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
+          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
+          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
+          OWNCONTEXT_SECURITY_ATTESTATION_FILE: ${{ vars.OWNCONTEXT_SECURITY_ATTESTATION_FILE }}
+          OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE: ${{ vars.OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE }}
+        run: node scripts/release-preflight.mjs --json
+
+      - name: Build the signed Windows x64 candidate
+        shell: pwsh
+        env:
+          OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
+          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
+          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
+          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
+        run: npm run make --workspace @owncontext/desktop
+
+      - name: Verify the source-bound release bundle and installed lifecycle
+        shell: pwsh
+        env:
+          OWNCONTEXT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          OWNCONTEXT_RUNNER_LABEL: windows-latest
+          OWNCONTEXT_DISPOSABLE_RUNNER_ACK: github-hosted-windows-latest-disposable
+        run: |
+          $builds = @(Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'public-*')
+          if ($builds.Count -ne 1) { throw "Expected exactly one public build directory; found $($builds.Count)." }
+          $buildDirectory = $builds[0].FullName
+          npm run release:bundle:verify -- --build "$buildDirectory"
+          & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1 -BuildDirectory "$buildDirectory" -ExecuteDisposableGitHubHostedLifecycle
+
+      - name: Publish the verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $build = Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'public-*' | Select-Object -First 1
+          if ($null -eq $build) { throw 'Public build directory is missing.' }
+          $assets = @(
+            (Join-Path $build.FullName 'make/squirrel.windows/x64/*'),
+            (Join-Path $build.FullName 'evidence/*'),
+            (Join-Path $build.FullName 'ci-evidence/*')
+          )
+          gh release create $env:GITHUB_REF_NAME $assets --verify-tag --title "OwnContext $env:GITHUB_REF_NAME" --notes-file (Join-Path $build.FullName 'evidence/RELEASE-NOTES.md')
