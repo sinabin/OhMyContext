@@ -55,7 +55,13 @@ jobs:
         run: |
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
           git config --global url."https://github.com/".insteadOf "git@github.com:"
-          npm ci --no-audit --fund=false
+          $log = npm ci --no-audit --fund=false 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            $detail = ($log.Trim() -replace '\s+', ' ')
+            if ($detail.Length -gt 6000) { $detail = $detail.Substring($detail.Length - 6000) }
+            Write-Output "::error title=npm ci failed::$detail"
+            throw "npm ci failed on the GitHub-hosted runner."
+          }
 
       - name: Run source and protocol verification
         run: npm run check
