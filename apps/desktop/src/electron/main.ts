@@ -850,7 +850,11 @@ async function bootstrap(): Promise<void> {
       return ownContextMcpLaunch();
     },
     runUpdate: createSquirrelUpdateRunner(process.execPath),
-    quit: () => app.quit(),
+    // Squirrel hooks are short-lived helper processes with no interactive
+    // window. Force the helper to terminate after its awaited update action;
+    // app.quit() can leave Electron's ready event loop alive on a headless
+    // first-run install.
+    quit: () => app.exit(0),
     reportFailure: ({ stage, code }) => {
       process.stderr.write(`Squirrel lifecycle ${stage} failed (${code}).\n`);
     },
