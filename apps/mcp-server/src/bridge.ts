@@ -27,4 +27,17 @@ export async function runStdioServerWithApi(
     clientKind: resolveClientKind(),
   });
   await server.connect(new StdioServerTransport());
+  // `connect()` installs the transport and returns immediately. Keep the
+  // Electron host alive until the MCP client closes stdin; otherwise the
+  // broker would close its encrypted vault immediately after initialization.
+  await new Promise<void>((resolve) => {
+    const finish = (): void => {
+      process.stdin.removeListener("end", finish);
+      process.stdin.removeListener("close", finish);
+      resolve();
+    };
+    process.stdin.once("end", finish);
+    process.stdin.once("close", finish);
+    process.stdin.resume();
+  });
 }
