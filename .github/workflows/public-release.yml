@@ -63,6 +63,7 @@ jobs:
         shell: pwsh
         env:
           OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
           OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
           OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
           OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
@@ -76,6 +77,7 @@ jobs:
         shell: pwsh
         env:
           OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
           OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
           OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
           OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}

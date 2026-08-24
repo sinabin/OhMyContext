@@ -18,6 +18,7 @@ describe("release profile boundary", () => {
   it("keeps public signing secrets environment-only", () => {
     const profile = resolveReleaseProfile({
       OWNCONTEXT_RELEASE_PROFILE: "public",
+      OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true",
       OWNCONTEXT_RELEASE_VERSION: "0.1.0",
       OWNCONTEXT_SIGNING_CERTIFICATE_FILE: "C:\\secure\\owncontext.pfx",
       OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: "secret-not-serialized",

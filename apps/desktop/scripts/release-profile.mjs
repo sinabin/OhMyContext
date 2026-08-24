@@ -57,6 +57,9 @@ export function resolveReleaseProfile(environment = process.env) {
   const timestampServer = requiredHttps(environment, "OWNCONTEXT_TIMESTAMP_SERVER");
   const updateUrl = requiredHttps(environment, "OWNCONTEXT_UPDATE_URL");
   const website = requiredHttps(environment, "OWNCONTEXT_SIGNING_WEBSITE");
+  if (environment.OWNCONTEXT_PUBLIC_RELEASE_APPROVAL !== "true") {
+    throw new Error("OWNCONTEXT_PUBLIC_RELEASE_APPROVAL=true is required for the public release profile.");
+  }
   const signing = {
     certificateFile,
     timestampServer,

@@ -104,6 +104,14 @@ async function inspect() {
     profile === "public" ? "public release profile selected" : "OWNCONTEXT_RELEASE_PROFILE is not public",
     "Use OWNCONTEXT_RELEASE_PROFILE=public only in the controlled release job after all gates pass.",
   );
+  addCheck(
+    "maintainer-approval",
+    process.env.OWNCONTEXT_PUBLIC_RELEASE_APPROVAL === "true",
+    process.env.OWNCONTEXT_PUBLIC_RELEASE_APPROVAL === "true"
+      ? "explicit maintainer public-release approval is present"
+      : "explicit maintainer public-release approval is absent",
+    "Set OWNCONTEXT_PUBLIC_RELEASE_APPROVAL=true only in the protected release environment after reviewing the complete evidence bundle.",
+  );
 
   const certificatePath = envPath("OWNCONTEXT_SIGNING_CERTIFICATE_FILE");
   const signingReady =
