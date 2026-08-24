@@ -757,7 +757,10 @@ try {
     -TimeoutMilliseconds 90000)
 
   try {
-    Wait-Until -TimeoutMilliseconds 30000 -FailureMessage "Silent Setup did not settle." -Condition {
+    # Setup launches Squirrel's detached Update.exe worker; on a clean
+    # GitHub-hosted Windows image extraction can outlive the bootstrapper by
+    # more than 30 seconds even though no product process remains.
+    Wait-Until -TimeoutMilliseconds 120000 -FailureMessage "Silent Setup did not settle." -Condition {
       (Test-Path -LiteralPath $installRoot -PathType Container) -and
       @(Get-ProductProcesses).Count -eq 0
     }
