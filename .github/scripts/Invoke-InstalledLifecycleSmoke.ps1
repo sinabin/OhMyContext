@@ -766,7 +766,16 @@ try {
     }
   } catch {
     $processes = @(Describe-ProductProcesses)
-    $suffix = if ($processes.Count -gt 0) { " Processes: $($processes -join ' | ')" } else { " No matching product process remained." }
+    $candidates = @(
+      Get-ChildItem -LiteralPath $localAppData -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match "(?i)owncontext|ohmy" } |
+        ForEach-Object { $_.FullName }
+    )
+    $suffix = if ($processes.Count -gt 0) {
+      " Processes: $($processes -join ' | ')"
+    } else {
+      " No matching product process remained. Candidate install directories: $($candidates -join ' | ')"
+    }
     throw "$($_.Exception.Message)$suffix"
   }
   $installedRoot = Assert-RegularDirectory $installRoot "installed Squirrel root"
