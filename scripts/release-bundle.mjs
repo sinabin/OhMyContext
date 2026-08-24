@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { constants, createReadStream } from "node:fs";
+import { constants, createReadStream, realpathSync } from "node:fs";
 import {
   copyFile,
   lstat,
@@ -12,7 +12,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { hasExactKeyStorageBoundary } from "./key-storage-evidence-policy.mjs";
@@ -1067,9 +1067,22 @@ function isSha256(value) {
 }
 
 function isStrictDescendant(parent, child) {
-  const difference = relative(parent, child);
+  const difference = relative(
+    canonicalComparablePath(parent),
+    canonicalComparablePath(child),
+  );
   return difference !== "" && difference !== ".." &&
     !difference.startsWith(`..${sep}`) && !isAbsolute(difference);
+}
+
+function canonicalComparablePath(value) {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!isObject(error) || error.code !== "ENOENT") throw error;
+    return join(canonicalComparablePath(dirname(normalized)), basename(normalized));
+  }
 }
 
 function toPosix(value) {
