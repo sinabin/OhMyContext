@@ -56,6 +56,10 @@ describe("unsigned alpha workflow policy", () => {
     expect(workflow).toContain("environment: owncontext-public-release");
     expect(workflow).toContain("OWNCONTEXT_SIGNING_CERTIFICATE_BASE64");
     expect(workflow).toContain("OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD");
+    expect(workflow).toContain("Normalize the release version");
+    expect(workflow).toContain("RAW_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}");
+    expect(workflow).toContain("OWNCONTEXT_RELEASE_VERSION=$releaseVersion");
+    expect(workflow).not.toContain("OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}");
     expect(workflow).toContain("node scripts/release-preflight.mjs --json");
     expect(workflow).toContain("-ExecuteDisposableGitHubHostedLifecycle");
     expect(workflow).toContain("gh release create");
