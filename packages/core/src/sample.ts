@@ -1,5 +1,5 @@
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, parse, resolve } from "node:path";
 
 export const OWNCONTEXT_SAMPLE_LIBRARY_VERSION = 1 as const;
 export const OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL =
@@ -81,12 +81,8 @@ export async function verifyOwnContextSampleLibraryDirectory(
   ) {
     throw new Error("Built-in sample directory is not a regular directory.");
   }
+  await assertNoReparseAncestor(requested);
   const canonical = await realpath(requested);
-  if (!samePath(requested, canonical)) {
-    throw new Error(
-      `Built-in sample directory must not traverse a link: requested=${requested} canonical=${canonical}`,
-    );
-  }
 
   const entries = await readdir(canonical, { withFileTypes: true });
   const expectedNames = OWNCONTEXT_SAMPLE_LIBRARY_FILES
@@ -121,14 +117,18 @@ function compareNames(left: string, right: string): number {
   return Buffer.from(left, "utf8").compare(Buffer.from(right, "utf8"));
 }
 
-function samePath(left: string, right: string): boolean {
-  return process.platform === "win32"
-    ? normalizeWindowsPath(left) === normalizeWindowsPath(right)
-    : resolve(left) === resolve(right);
-}
-
-function normalizeWindowsPath(value: string): string {
-  return resolve(value)
-    .replace(/^\\\\\\?\\/u, "")
-    .toLocaleLowerCase("en-US");
+async function assertNoReparseAncestor(requested: string): Promise<void> {
+  const parsed = parse(requested);
+  let cursor = parsed.root;
+  const segments = requested
+    .slice(parsed.root.length)
+    .split(/[\\/]+/u)
+    .filter((segment) => segment.length > 0);
+  for (const segment of segments) {
+    cursor = join(cursor, segment);
+    const metadata = await lstat(cursor);
+    if (metadata.isSymbolicLink()) {
+      throw new Error("Built-in sample directory must not traverse a link.");
+    }
+  }
 }
