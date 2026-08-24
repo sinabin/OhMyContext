@@ -829,36 +829,48 @@ async function bootstrap(): Promise<void> {
     app.setPath("userData", guiSmoke.userDataPath);
   }
 
-  // Electron ignores app.quit() before the ready event. Squirrel launches
-  // this process for install/update/uninstall hooks before any window exists,
-  // so wait for readiness before starting the lifecycle branch or the hosted
-  // installer smoke can observe a process that never settles.
-  if (detectSquirrelEvent(process.platform, app.isPackaged, process.argv)) {
-    await app.whenReady();
+  const startSquirrelLifecycle = (): ReturnType<typeof beginSquirrelLifecycle> =>
+    beginSquirrelLifecycle({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      argv: process.argv,
+      executablePath: process.execPath,
+      createConfigService: () => createCodexConfigService(),
+      createClaudeCodeConfigService: () => createClaudeCodeConfigService(),
+      createLaunch: () => {
+        if (!existsSync(mcpEntryPath())) {
+          throw new Error("Packaged MCP runtime is unavailable.");
+        }
+        return ownContextMcpLaunch();
+      },
+      runUpdate: createSquirrelUpdateRunner(process.execPath),
+      // Squirrel hooks are short-lived helper processes with no interactive
+      // window. Force the helper to terminate after its awaited update action.
+      quit: () => app.exit(0),
+      reportFailure: ({ stage, code }) => {
+        process.stderr.write(`Squirrel lifecycle ${stage} failed (${code}).\n`);
+      },
+    });
+  const squirrelEvent = detectSquirrelEvent(
+    process.platform,
+    app.isPackaged,
+    process.argv,
+  );
+  if (squirrelEvent) {
+    // Electron does not emit ready until main-module evaluation finishes, so
+    // registering a continuation avoids a top-level await deadlock in hooks.
+    void app.whenReady()
+      .then(async () => {
+        const squirrel = startSquirrelLifecycle();
+        if (squirrel.handled) await squirrel.completion;
+      })
+      .catch(() => {
+        process.stderr.write("OhMyContext Squirrel lifecycle failed.\n");
+        app.exit(1);
+      });
+    return;
   }
-  const squirrel = beginSquirrelLifecycle({
-    platform: process.platform,
-    isPackaged: app.isPackaged,
-    argv: process.argv,
-    executablePath: process.execPath,
-    createConfigService: () => createCodexConfigService(),
-    createClaudeCodeConfigService: () => createClaudeCodeConfigService(),
-    createLaunch: () => {
-      if (!existsSync(mcpEntryPath())) {
-        throw new Error("Packaged MCP runtime is unavailable.");
-      }
-      return ownContextMcpLaunch();
-    },
-    runUpdate: createSquirrelUpdateRunner(process.execPath),
-    // Squirrel hooks are short-lived helper processes with no interactive
-    // window. Force the helper to terminate after its awaited update action;
-    // app.quit() can leave Electron's ready event loop alive on a headless
-    // first-run install.
-    quit: () => app.exit(0),
-    reportFailure: ({ stage, code }) => {
-      process.stderr.write(`Squirrel lifecycle ${stage} failed (${code}).\n`);
-    },
-  });
+  const squirrel = startSquirrelLifecycle();
   if (squirrel.handled) {
     await squirrel.completion;
     return;
