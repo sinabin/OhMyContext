@@ -1,4 +1,4 @@
-name: OwnContext public release
+name: OhMyContext public release
 
 on:
   push:
@@ -168,4 +168,4 @@ jobs:
             (Join-Path $build.FullName 'evidence/*'),
             (Join-Path $build.FullName 'ci-evidence/*')
           )
-          gh release create $env:GITHUB_REF_NAME $assets --verify-tag --title "OwnContext $env:GITHUB_REF_NAME" --notes-file (Join-Path $build.FullName 'evidence/RELEASE-NOTES.md')
+          gh release create $env:GITHUB_REF_NAME $assets --verify-tag --title "OhMyContext $env:GITHUB_REF_NAME" --notes-file (Join-Path $build.FullName 'evidence/RELEASE-NOTES.md')

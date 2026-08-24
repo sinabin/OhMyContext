@@ -13,12 +13,12 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 . (Join-Path $PSScriptRoot "InstalledLifecycleAssertions.ps1")
 
-$ProductPackageId = "OwnContextDeveloperPreview"
-$ProductTitle = "OwnContext Developer Preview"
-$ProductPublisher = "OwnContext project contributors"
-$ProductProcessName = "OwnContextDeveloperPreview"
-$ApplicationExecutableName = "OwnContextDeveloperPreview.exe"
-$SetupFileName = "OwnContext-Developer-Preview-Unsigned-Setup.exe"
+$ProductPackageId = "OhMyContextDeveloperPreview"
+$ProductTitle = "OhMyContext Developer Preview"
+$ProductPublisher = "OhMyContext project contributors"
+$ProductProcessName = "OhMyContextDeveloperPreview"
+$ApplicationExecutableName = "OhMyContextDeveloperPreview.exe"
+$SetupFileName = "OhMyContext-Developer-Preview-Unsigned-Setup.exe"
 $ReleaseManifestName = "OWNCONTEXT-RELEASE-CANDIDATE.json"
 $ReleaseChecksumsName = "OWNCONTEXT-RELEASE-SHA256SUMS"
 $CodexMarkerStart = "# >>> owncontext managed MCP server (do not edit) >>>"
@@ -587,23 +587,23 @@ $manifest = (Read-BoundedUtf8 $manifestPath) | ConvertFrom-Json -Depth 30
 $commit = $env:GITHUB_SHA.ToLowerInvariant()
 $publicRelease = [bool]$manifest.release.publicRelease
 if ($publicRelease) {
-  $ProductPackageId = "OwnContext"
-  $ProductTitle = "OwnContext"
-  $ProductPublisher = "NextH and OwnContext contributors"
-  $ProductProcessName = "OwnContext"
-  $ApplicationExecutableName = "OwnContext.exe"
-  $SetupFileName = "OwnContext-Setup.exe"
-  $expectedPackagedDirectoryName = "OwnContext-win32-x64"
-  $expectedProductName = "OwnContext"
+  $ProductPackageId = "OhMyContext"
+  $ProductTitle = "OhMyContext"
+  $ProductPublisher = "NextH and OhMyContext contributors"
+  $ProductProcessName = "OhMyContext"
+  $ApplicationExecutableName = "OhMyContext.exe"
+  $SetupFileName = "OhMyContext-Setup.exe"
+  $expectedPackagedDirectoryName = "OhMyContext-win32-x64"
+  $expectedProductName = "OhMyContext"
 } else {
-  $expectedPackagedDirectoryName = "OwnContext Developer Preview-win32-x64"
-  $expectedProductName = "$ProductTitle (Unsigned)"
+  $expectedPackagedDirectoryName = "OhMyContext Developer Preview-win32-x64"
+  $expectedProductName = $ProductTitle
 }
 if (
   $manifest.schemaVersion -ne 1 -or
   (($publicRelease -and $manifest.status -ne "PUBLIC RELEASE") -or
     (-not $publicRelease -and $manifest.status -ne "DRAFT — NOT FOR PUBLIC RELEASE")) -or
-  $manifest.product -ne "OwnContext" -or
+  $manifest.product -ne "OhMyContext" -or
   $manifest.release.platform -ne "Windows x64" -or
   (($publicRelease -and $manifest.release.channel -ne "stable") -or
     (-not $publicRelease -and $manifest.release.channel -ne "developer-alpha")) -or

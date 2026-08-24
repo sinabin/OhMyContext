@@ -111,14 +111,14 @@ if (-not $duplicatePropertyRejected) {
   throw "Canonical JSON comparison accepted a duplicate property."
 }
 
-$testUpdate = 'C:\Users\runneradmin\AppData\Local\OwnContextDeveloperPreview\Update.exe'
-$validUninstall = '"C:\Users\runneradmin\AppData\Local\OwnContextDeveloperPreview\Update.exe" --uninstall'
+$testUpdate = 'C:\Users\runneradmin\AppData\Local\OhMyContextDeveloperPreview\Update.exe'
+$validUninstall = '"C:\Users\runneradmin\AppData\Local\OhMyContextDeveloperPreview\Update.exe" --uninstall'
 $validQuietUninstall = "$validUninstall -s"
 if (-not (Test-ExactSquirrelArpCommands $testUpdate $validUninstall $validQuietUninstall)) {
   throw "Exact Squirrel ARP command policy rejected the pinned valid form."
 }
 foreach ($invalidArp in @(
-  @('"C:\malware.exe" "C:\Users\runneradmin\AppData\Local\OwnContextDeveloperPreview\Update.exe" --uninstall', $validQuietUninstall),
+  @('"C:\malware.exe" "C:\Users\runneradmin\AppData\Local\OhMyContextDeveloperPreview\Update.exe" --uninstall', $validQuietUninstall),
   @("$validUninstall --ignored", $validQuietUninstall),
   @($validUninstall, "$validQuietUninstall --ignored"),
   @($validUninstall, $validUninstall)
@@ -128,36 +128,36 @@ foreach ($invalidArp in @(
   }
 }
 
-$testRootStub = 'C:\Users\runneradmin\AppData\Local\OwnContextDeveloperPreview\OwnContextDeveloperPreview.exe'
-$testVersionExe = 'C:\Users\runneradmin\AppData\Local\OwnContextDeveloperPreview\app-0.0.0\OwnContextDeveloperPreview.exe'
+$testRootStub = 'C:\Users\runneradmin\AppData\Local\OhMyContextDeveloperPreview\OhMyContextDeveloperPreview.exe'
+$testVersionExe = 'C:\Users\runneradmin\AppData\Local\OhMyContextDeveloperPreview\app-0.0.0\OhMyContextDeveloperPreview.exe'
 $testDirectTargets = @($testRootStub, $testVersionExe)
 foreach ($directTarget in $testDirectTargets) {
   foreach ($emptyArguments in @('', '   ')) {
-    if (-not (Test-ExactSquirrelShortcutLaunch $directTarget $emptyArguments $testDirectTargets $testUpdate 'OwnContextDeveloperPreview.exe')) {
+    if (-not (Test-ExactSquirrelShortcutLaunch $directTarget $emptyArguments $testDirectTargets $testUpdate 'OhMyContextDeveloperPreview.exe')) {
       throw "Exact Squirrel shortcut policy rejected an argument-free direct launch."
     }
   }
-  if (Test-ExactSquirrelShortcutLaunch $directTarget '--ignored' $testDirectTargets $testUpdate 'OwnContextDeveloperPreview.exe') {
+  if (Test-ExactSquirrelShortcutLaunch $directTarget '--ignored' $testDirectTargets $testUpdate 'OhMyContextDeveloperPreview.exe') {
     throw "Exact Squirrel shortcut policy accepted arguments on a direct launch."
   }
 }
 foreach ($validUpdaterArguments in @(
-  '--processStart OwnContextDeveloperPreview.exe',
-  '--processStart "OwnContextDeveloperPreview.exe"',
-  '--processStart=OwnContextDeveloperPreview.exe',
-  '--processStart="OwnContextDeveloperPreview.exe"'
+  '--processStart OhMyContextDeveloperPreview.exe',
+  '--processStart "OhMyContextDeveloperPreview.exe"',
+  '--processStart=OhMyContextDeveloperPreview.exe',
+  '--processStart="OhMyContextDeveloperPreview.exe"'
 )) {
-  if (-not (Test-ExactSquirrelShortcutLaunch $testUpdate $validUpdaterArguments $testDirectTargets $testUpdate 'OwnContextDeveloperPreview.exe')) {
+  if (-not (Test-ExactSquirrelShortcutLaunch $testUpdate $validUpdaterArguments $testDirectTargets $testUpdate 'OhMyContextDeveloperPreview.exe')) {
     throw "Exact Squirrel shortcut policy rejected a pinned updater form."
   }
 }
 foreach ($invalidUpdaterArguments in @(
-  '--processStart=Malware.exe --ignored OwnContextDeveloperPreview.exe',
-  '--processStart OwnContextDeveloperPreview.exe --ignored',
-  ' --processStart OwnContextDeveloperPreview.exe',
-  '--processStart OwnContextDeveloperPreview.exe '
+  '--processStart=Malware.exe --ignored OhMyContextDeveloperPreview.exe',
+  '--processStart OhMyContextDeveloperPreview.exe --ignored',
+  ' --processStart OhMyContextDeveloperPreview.exe',
+  '--processStart OhMyContextDeveloperPreview.exe '
 )) {
-  if (Test-ExactSquirrelShortcutLaunch $testUpdate $invalidUpdaterArguments $testDirectTargets $testUpdate 'OwnContextDeveloperPreview.exe') {
+  if (Test-ExactSquirrelShortcutLaunch $testUpdate $invalidUpdaterArguments $testDirectTargets $testUpdate 'OhMyContextDeveloperPreview.exe') {
     throw "Exact Squirrel shortcut policy accepted an adversarial updater form."
   }
 }
