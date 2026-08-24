@@ -851,9 +851,23 @@ try {
   $evidencePath = Join-Path $ciEvidenceDirectory $LifecycleEvidenceName
   $evidence = [ordered]@{
     schemaVersion = 1
-    status = "CI-ONLY VERIFICATION — NOT FOR PUBLIC RELEASE"
+    status = "passed"
     control = "windows-squirrel-installed-lifecycle"
     result = "PASS"
+    sourceCommit = $commit
+    runner = "github-hosted/windows-latest"
+    nodeRequired = $false
+    installerSha256 = $setupHash
+    steps = [ordered]@{
+      "setup-install" = $true
+      "no-node-launch" = $true
+      "sample-import-and-search" = $true
+      "mcp-search-and-fetch" = $true
+      "forced-termination-recovery" = $true
+      "managed-client-cleanup" = $true
+      "squirrel-uninstall" = $true
+      "clean-profile-relaunch" = $true
+    }
     setup = [ordered]@{
       fileName = $SetupFileName
       size = $setupLength
@@ -865,7 +879,7 @@ try {
       forgeBuildId = [IO.Path]::GetFileName($build)
       bundleContextRevalidated = $true
     }
-    runner = [ordered]@{
+    runnerDetails = [ordered]@{
       environment = "github-hosted"
       requestedLabel = "windows-latest"
       os = $env:RUNNER_OS

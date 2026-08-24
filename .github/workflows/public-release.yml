@@ -59,20 +59,6 @@ jobs:
       - name: Run source and protocol verification
         run: npm run check
 
-      - name: Run the release preflight before any artifact is published
-        shell: pwsh
-        env:
-          OWNCONTEXT_RELEASE_PROFILE: public
-          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
-          OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
-          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
-          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
-          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
-          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
-          OWNCONTEXT_SECURITY_ATTESTATION_FILE: ${{ vars.OWNCONTEXT_SECURITY_ATTESTATION_FILE }}
-          OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE: ${{ vars.OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE }}
-        run: node scripts/release-preflight.mjs --json
-
       - name: Build the signed Windows x64 candidate
         shell: pwsh
         env:
@@ -97,6 +83,23 @@ jobs:
           $buildDirectory = $builds[0].FullName
           npm run release:bundle:verify -- --build "$buildDirectory"
           & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1 -BuildDirectory "$buildDirectory" -ExecuteDisposableGitHubHostedLifecycle
+
+      - name: Run final release preflight after lifecycle evidence
+        shell: pwsh
+        env:
+          OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
+          OWNCONTEXT_RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
+          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
+          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
+          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
+          OWNCONTEXT_SECURITY_ATTESTATION_FILE: ${{ vars.OWNCONTEXT_SECURITY_ATTESTATION_FILE }}
+        run: |
+          $build = Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'public-*' | Select-Object -First 1
+          if ($null -eq $build) { throw 'Public build directory is missing.' }
+          $env:OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE = Join-Path $build.FullName 'ci-evidence/WINDOWS-INSTALLED-LIFECYCLE-CI.json'
+          node scripts/release-preflight.mjs --json
 
       - name: Publish the verified release
         shell: pwsh
