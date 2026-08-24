@@ -15,6 +15,8 @@ import { open as openFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import {
+  basename,
+  dirname,
   isAbsolute,
   join,
   parse,
@@ -968,7 +970,19 @@ function isStrictDescendant(parent: string, child: string): boolean {
 }
 
 function sameResolvedPath(left: string, right: string): boolean {
-  return normalizePath(resolve(left)) === normalizePath(resolve(right));
+  return normalizePath(canonicalComparablePath(left)) ===
+    normalizePath(canonicalComparablePath(right));
+}
+
+function canonicalComparablePath(value: string): string {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) throw error;
+    const canonicalParent = canonicalComparablePath(dirname(normalized));
+    return join(canonicalParent, basename(normalized));
+  }
 }
 
 function normalizePath(path: string): string {
