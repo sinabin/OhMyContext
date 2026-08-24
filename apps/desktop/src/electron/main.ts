@@ -84,6 +84,7 @@ import {
 import {
   beginSquirrelLifecycle,
   createSquirrelUpdateRunner,
+  detectSquirrelEvent,
 } from "./squirrel-lifecycle.js";
 import { materializeSampleLibrary } from "./sample-library.js";
 import {
@@ -828,6 +829,13 @@ async function bootstrap(): Promise<void> {
     app.setPath("userData", guiSmoke.userDataPath);
   }
 
+  // Electron ignores app.quit() before the ready event. Squirrel launches
+  // this process for install/update/uninstall hooks before any window exists,
+  // so wait for readiness before starting the lifecycle branch or the hosted
+  // installer smoke can observe a process that never settles.
+  if (detectSquirrelEvent(process.platform, app.isPackaged, process.argv)) {
+    await app.whenReady();
+  }
   const squirrel = beginSquirrelLifecycle({
     platform: process.platform,
     isPackaged: app.isPackaged,
