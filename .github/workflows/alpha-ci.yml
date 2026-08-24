@@ -51,7 +51,11 @@ jobs:
           }
 
       - name: Install locked dependencies
-        run: npm ci
+        shell: pwsh
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          npm ci --no-audit --fund=false
 
       - name: Run source and protocol verification
         run: npm run check
