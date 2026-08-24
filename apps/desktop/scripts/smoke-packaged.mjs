@@ -60,9 +60,18 @@ const outDirectory = resolve(desktopDirectory, "out");
 const requireMaker = process.argv.includes("--require-maker");
 const releaseProfile = resolveReleaseProfile();
 const squirrelPackageName = releaseProfile.squirrelName;
+const projectVersion = JSON.parse(
+  await readFile(resolve(projectRoot, "package.json"), "utf8"),
+).version;
+if (
+  typeof projectVersion !== "string" ||
+  !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(projectVersion)
+) {
+  throw new Error("The root package version is not a valid semver.");
+}
 const applicationExecutableName = `${releaseProfile.executableName}.exe`;
 const setupFileName = releaseProfile.setupExe;
-const fullPackageFileName = `${squirrelPackageName}-${releaseProfile.publicRelease ? releaseProfile.version : "0.0.0"}-full.nupkg`;
+const fullPackageFileName = `${squirrelPackageName}-${releaseProfile.publicRelease ? releaseProfile.version : projectVersion}-full.nupkg`;
 const keyStorageEvidenceFileName = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;

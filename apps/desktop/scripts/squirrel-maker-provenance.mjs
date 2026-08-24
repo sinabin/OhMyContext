@@ -48,14 +48,14 @@ const CANONICAL_RESOURCE_BYTES = Uint8Array.from([
 ]).buffer;
 const EXPECTED_SETUP_VERSION_RESOURCE = {
   length: 1_076,
-  sha256: "33afdb337220d75772ea1285e93219689a7cfcafe4b9abc9854373e6f051382f",
+  sha256: "753c09076a46cec848ad7bf0294c2743ae4f9c5bb87ad56609a30ef9d7bcebc7",
 };
 const NUGET_CORE_PROPERTIES =
   /^package\/services\/metadata\/core-properties\/[0-9a-f]{32}\.psmdcp$/u;
 const PINNED_NUGET_METADATA = new Map([
   ["OwnContextDeveloperPreview.nuspec", {
     length: 616,
-    sha256: "b04dac1774db65f09fa0d85ed42cf8406390a2b20a75253368294e9d1346db23",
+    sha256: "9a4f84b33511c8d016ed1b629beb3f5b09afb7b619246681c4afef210b73bcaa",
   }],
   ["[Content_Types].xml", {
     length: 1_622,
@@ -64,7 +64,7 @@ const PINNED_NUGET_METADATA = new Map([
 ]);
 const PINNED_NUGET_CORE_PROPERTIES = {
   length: 745,
-  sha256: "09998bd5901df7bbcddae023bda8d82a6531eb0425a10db671a616fd8b6290f4",
+  sha256: "bd03203956fdf72c1c86b8e27a16e037036bddc1c1f2845ea7c72b3cf961f33f",
 };
 const NORMALIZED_NUGET_RELATIONSHIPS =
   "\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.microsoft.com/packaging/2010/07/manifest\" Target=\"/OwnContextDeveloperPreview.nuspec\" Id=\"R<id>\" /><Relationship Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"/<core>\" Id=\"R<id>\" /></Relationships>";
