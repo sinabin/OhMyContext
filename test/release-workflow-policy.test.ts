@@ -52,7 +52,7 @@ describe("unsigned alpha workflow policy", () => {
   it("pins actions and exercises the complete local verification chain", async () => {
     const workflow = await readFile(workflowPath, "utf8");
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gmu)].map((match) => match[1]);
-    expect(uses).toHaveLength(4);
+    expect(uses).toHaveLength(5);
     for (const action of uses) {
       expect(action).toMatch(/^[\w-]+\/[\w-]+@[0-9a-f]{40}$/u);
       expect(action).not.toMatch(/@v\d/u);
