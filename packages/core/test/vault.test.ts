@@ -1,5 +1,5 @@
 import { existsSync, rmSync, statSync } from "node:fs";
-import { link, mkdir, mkdtemp, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -386,9 +386,10 @@ describe("vault ingestion and retrieval", () => {
     const spoofAttempt = await importDirectory(vault, otherRoot, {
       provenanceRootUri: OWNCONTEXT_SAMPLE_LIBRARY_PROVENANCE_ROOT,
     } as ImportDirectoryOptions);
-    expect(spoofAttempt.rootUri).toBe(pathToFileURL(`${otherRoot}${sep}`).href);
+    const canonicalOtherRoot = await realpath(otherRoot);
+    expect(spoofAttempt.rootUri).toBe(pathToFileURL(`${canonicalOtherRoot}${sep}`).href);
     expect(spoofAttempt.documents[0]?.sourceUri).toBe(
-      pathToFileURL(join(otherRoot, "other.md")).href,
+      pathToFileURL(join(canonicalOtherRoot, "other.md")).href,
     );
 
     await writeFile(join(root, "getting-started.md"), "tampered\n", "utf8");
