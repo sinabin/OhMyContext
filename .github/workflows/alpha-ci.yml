@@ -43,6 +43,9 @@ jobs:
             & .github/scripts/Test-InstalledLifecycleSmokeStatic.ps1
           } catch {
             $detail = ($_ | Out-String).Trim()
+            $annotation = ($detail -replace '\s+', ' ')
+            if ($annotation.Length -gt 6000) { $annotation = $annotation.Substring($annotation.Length - 6000) }
+            Write-Output "::error title=installed lifecycle static validation failed::$annotation"
             "Installed lifecycle static validation failure:" |
               Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             $detail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
