@@ -38,7 +38,6 @@ jobs:
 
       - name: Statically validate the installed-lifecycle safety boundary
         shell: pwsh
-        continue-on-error: true
         run: |
           try {
             & .github/scripts/Test-InstalledLifecycleSmokeStatic.ps1
@@ -68,12 +67,18 @@ jobs:
         run: |
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
           git config --global url."https://github.com/".insteadOf "git@github.com:"
-          $log = npm ci --no-audit --fund=false 2>&1 | Out-String
+          $log = npm ci --ignore-scripts --no-audit --fund=false 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) {
             $detail = ($log.Trim() -replace '\s+', ' ')
             if ($detail.Length -gt 6000) { $detail = $detail.Substring($detail.Length - 6000) }
             Write-Output "::error title=npm ci failed::$detail"
             throw "npm ci failed on the GitHub-hosted runner."
+          }
+          Push-Location node_modules/electron-winstaller
+          try {
+            node script/select-7z-arch.js
+          } finally {
+            Pop-Location
           }
 
       - name: Run source and protocol verification
