@@ -105,6 +105,27 @@ export async function acceptOwnContextBrokerConnection(
   }
 
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = (): void => {
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const succeed = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.pause();
+      resolve();
+    };
+    const onError = (error: Error): void => fail(error);
+    const onClose = (): void => fail(new Error("OwnContext MCP broker closed before handshake."));
     const onData = (chunk: Buffer): void => {
       try {
         lineBuffer.append(chunk);
@@ -119,16 +140,14 @@ export async function acceptOwnContextBrokerConnection(
           initialMessages.push(message);
         }
         if (hello) {
-          socket.off("data", onData);
-          socket.pause();
-          resolve();
+          succeed();
         }
       } catch (error) {
-        socket.off("data", onData);
-        reject(error);
+        fail(error instanceof Error ? error : new Error("OwnContext MCP broker handshake failed."));
       }
     };
-    socket.once("error", reject);
+    socket.on("error", onError);
+    socket.once("close", onClose);
     socket.on("data", onData);
     socket.resume();
   });

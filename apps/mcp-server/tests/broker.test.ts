@@ -90,4 +90,27 @@ describe("OwnContext MCP broker transport", () => {
     await new Promise<void>((resolve) => socket.once("close", () => resolve()));
     expect(socket.destroyed).toBe(true);
   });
+
+  it("rejects a client that closes before the handshake", async () => {
+    const endpoint = pipeName();
+    let resolveRejection!: (error: unknown) => void;
+    const rejection = new Promise<unknown>((resolve) => {
+      resolveRejection = resolve;
+    });
+    const server = createServer((socket) => {
+      void acceptOwnContextBrokerConnection(socket).catch((error) => {
+        socket.destroy();
+        resolveRejection(error);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+    const socket = createConnection(endpoint);
+    sockets.push(socket);
+    await new Promise<void>((resolve) => socket.once("connect", resolve));
+    socket.end();
+    const error = await rejection;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("closed before handshake");
+  });
 });
