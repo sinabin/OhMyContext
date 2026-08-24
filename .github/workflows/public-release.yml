@@ -70,6 +70,22 @@ jobs:
           [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:OWNCONTEXT_SIGNING_CERTIFICATE_BASE64))
           "OWNCONTEXT_SIGNING_CERTIFICATE_FILE=$certificatePath" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Decode the protected security attestation
+        shell: pwsh
+        env:
+          OWNCONTEXT_SECURITY_ATTESTATION_BASE64: ${{ secrets.OWNCONTEXT_SECURITY_ATTESTATION_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OWNCONTEXT_SECURITY_ATTESTATION_BASE64)) {
+            throw 'The protected security attestation secret is missing.'
+          }
+          $attestationPath = Join-Path $env:RUNNER_TEMP 'owncontext-security-attestation.json'
+          try {
+            [IO.File]::WriteAllBytes($attestationPath, [Convert]::FromBase64String($env:OWNCONTEXT_SECURITY_ATTESTATION_BASE64))
+          } catch {
+            throw 'The protected security attestation secret is not valid base64.'
+          }
+          "OWNCONTEXT_SECURITY_ATTESTATION_FILE=$attestationPath" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Run source and protocol verification
         run: npm run check
 
@@ -87,6 +103,12 @@ jobs:
       - name: Verify the source-bound release bundle and installed lifecycle
         shell: pwsh
         env:
+          OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
+          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
+          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
+          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
+          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
           OWNCONTEXT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           OWNCONTEXT_RUNNER_LABEL: windows-latest
           OWNCONTEXT_DISPOSABLE_RUNNER_ACK: github-hosted-windows-latest-disposable
@@ -97,6 +119,29 @@ jobs:
           npm run release:bundle:verify -- --build "$buildDirectory"
           & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1 -BuildDirectory "$buildDirectory" -ExecuteDisposableGitHubHostedLifecycle
 
+      - name: Finalize the source-bound public bundle
+        shell: pwsh
+        env:
+          OWNCONTEXT_RELEASE_PROFILE: public
+          OWNCONTEXT_PUBLIC_RELEASE_APPROVAL: "true"
+          OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.OWNCONTEXT_SIGNING_CERTIFICATE_PASSWORD }}
+          OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
+          OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
+          OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
+        run: |
+          $build = Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'public-*' | Select-Object -First 1
+          if ($null -eq $build) { throw 'Public build directory is missing.' }
+          $cleanEvidence = Join-Path $build.FullName 'ci-evidence/WINDOWS-INSTALLED-LIFECYCLE-CI.json'
+          if (-not (Test-Path -LiteralPath $cleanEvidence -PathType Leaf)) { throw 'Clean-machine evidence is missing.' }
+          $env:OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE = $cleanEvidence
+          "OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE=$cleanEvidence" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "OWNCONTEXT_RELEASE_BUILD_DIRECTORY=$($build.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Remove-Item -LiteralPath (Join-Path $build.FullName 'evidence/OWNCONTEXT-RELEASE-CANDIDATE.json') -Force
+          Remove-Item -LiteralPath (Join-Path $build.FullName 'evidence/OWNCONTEXT-RELEASE-SHA256SUMS') -Force
+          Remove-Item -LiteralPath (Join-Path $build.FullName 'evidence/SOURCE-package-lock.json') -Force
+          npm run release:bundle:generate -- --build "$($build.FullName)"
+          npm run release:bundle:verify -- --build "$($build.FullName)"
+
       - name: Run final release preflight after lifecycle evidence
         shell: pwsh
         env:
@@ -106,11 +151,9 @@ jobs:
           OWNCONTEXT_TIMESTAMP_SERVER: ${{ vars.OWNCONTEXT_TIMESTAMP_SERVER }}
           OWNCONTEXT_UPDATE_URL: ${{ vars.OWNCONTEXT_UPDATE_URL }}
           OWNCONTEXT_SIGNING_WEBSITE: ${{ vars.OWNCONTEXT_SIGNING_WEBSITE }}
-          OWNCONTEXT_SECURITY_ATTESTATION_FILE: ${{ vars.OWNCONTEXT_SECURITY_ATTESTATION_FILE }}
         run: |
           $build = Get-ChildItem -LiteralPath apps/desktop/out -Directory -Filter 'public-*' | Select-Object -First 1
           if ($null -eq $build) { throw 'Public build directory is missing.' }
-          $env:OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE = Join-Path $build.FullName 'ci-evidence/WINDOWS-INSTALLED-LIFECYCLE-CI.json'
           node scripts/release-preflight.mjs --json
 
       - name: Publish the verified release

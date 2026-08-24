@@ -46,6 +46,29 @@ async function readEvidence(candidate) {
   }
 }
 
+async function readCandidateBinding(candidateBuildDirectory) {
+  if (!candidateBuildDirectory) return undefined;
+  const manifestPath = resolve(
+    candidateBuildDirectory,
+    "evidence",
+    "OWNCONTEXT-RELEASE-CANDIDATE.json",
+  );
+  const manifest = await readEvidence(manifestPath);
+  const setup = Array.isArray(manifest?.artifacts)
+    ? manifest.artifacts.find((artifact) => artifact?.role === "windows-setup")
+    : undefined;
+  const sourceCommit = manifest?.source?.commit;
+  const installerSha256 = setup?.sha256;
+  if (
+    manifest?.release?.publicRelease !== true ||
+    !/^[0-9a-f]{40}$/u.test(sourceCommit ?? "") ||
+    !/^[0-9a-f]{64}$/u.test(installerSha256 ?? "")
+  ) {
+    return undefined;
+  }
+  return { sourceCommit, installerSha256 };
+}
+
 async function git(args) {
   try {
     const { stdout } = await execFileAsync("git", args, {
@@ -153,22 +176,53 @@ async function inspect() {
   const securityEvidence = envPath("OWNCONTEXT_SECURITY_ATTESTATION_FILE");
   const securityRecord = await readEvidence(securityEvidence);
   const securityValidation = validateSecurityReleaseAttestation(securityRecord);
-  const securityReady = securityValidation.ok;
+  const candidateBinding = await readCandidateBinding(
+    envPath("OWNCONTEXT_RELEASE_BUILD_DIRECTORY"),
+  );
+  const publicProfile = process.env.OWNCONTEXT_RELEASE_PROFILE === "public";
+  const candidateReady = !publicProfile || candidateBinding !== undefined;
+  addCheck(
+    "source-bound-release-candidate",
+    candidateReady,
+    candidateReady
+      ? "final public manifest is source-bound to a signed installer"
+      : "final public release candidate manifest is missing or still draft",
+    "Finalize and verify the public release bundle after clean-machine evidence is generated.",
+  );
+  const securityBindingReady =
+    !publicProfile ||
+    (candidateBinding !== undefined &&
+      securityRecord?.sourceCommit === candidateBinding.sourceCommit &&
+      securityRecord?.installerSha256 === candidateBinding.installerSha256);
+  const securityReady = securityValidation.ok && securityBindingReady;
   addCheck(
     "security-attestation",
     securityReady,
-    securityReady ? "release security attestation passed" : securityValidation.reason,
+    securityReady
+      ? "release security attestation passed for the final candidate"
+      : securityBindingReady
+        ? securityValidation.reason
+        : "security attestation is not bound to the final public candidate",
     "Attach evidence covering encrypted normal desktop/MCP storage, sidecars, backups, crash/restart recovery, races, DACLs, key rotation, and parser boundaries.",
   );
 
   const lifecycleEvidence = envPath("OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE");
   const lifecycleRecord = await readEvidence(lifecycleEvidence);
   const lifecycleValidation = validateCleanMachineEvidence(lifecycleRecord);
-  const lifecycleReady = lifecycleValidation.ok;
+  const lifecycleBindingReady =
+    !publicProfile ||
+    (candidateBinding !== undefined &&
+      lifecycleRecord?.sourceCommit === candidateBinding.sourceCommit &&
+      lifecycleRecord?.installerSha256 === candidateBinding.installerSha256);
+  const lifecycleReady = lifecycleValidation.ok && lifecycleBindingReady;
   addCheck(
     "clean-machine-lifecycle",
     lifecycleReady,
-    lifecycleReady ? "clean-machine lifecycle evidence passed" : lifecycleValidation.reason,
+    lifecycleReady
+      ? "clean-machine lifecycle evidence passed for the final candidate"
+      : lifecycleBindingReady
+        ? lifecycleValidation.reason
+        : "clean-machine evidence is not bound to the final public candidate",
     "Run the installed lifecycle harness on a disposable GitHub-hosted windows-latest runner and retain its source-bound evidence.",
   );
 
