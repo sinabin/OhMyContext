@@ -545,7 +545,7 @@ function capturePreparedContext(context: EncryptedVaultSmokeContext): void {
   assertAbsent(context.resultPath);
 }
 
-function loadPackagedEncryptedSqliteRuntime(
+export function loadPackagedEncryptedSqliteRuntime(
   resourcesPath: string,
 ): EncryptedSqliteProviderRuntime {
   if (

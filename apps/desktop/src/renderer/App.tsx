@@ -232,6 +232,7 @@ function receiptStatus(receipt: DeletionReceiptView): string {
 export function App() {
   const [view, setView] = useState<View>("library");
   const [status, setStatus] = useState("Starting local vault…");
+  const [encryption, setEncryption] = useState<"not-implemented" | "application-encrypted">("not-implemented");
   const [notice, setNotice] = useState("No source imported in this session.");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
@@ -302,7 +303,10 @@ export function App() {
   useEffect(() => {
     const stopListening = window.ownContext.onImportProgress(setProgress);
     void Promise.all([
-      window.ownContext.getStatus().then((value) => setStatus(value.mode)),
+      window.ownContext.getStatus().then((value) => {
+        setStatus(value.mode);
+        setEncryption(value.encryption);
+      }),
       refreshSources(),
       refreshReceipts(),
       refreshRetrievalActivity(),
@@ -702,8 +706,12 @@ export function App() {
         <div className="trust-note">
           <span className="status-dot" />
           <div>
-            <strong>Developer alpha</strong>
-            <p>Application-level encryption is not implemented yet. Use non-sensitive test data.</p>
+            <strong>{encryption === "application-encrypted" ? "Encrypted local vault" : "Developer alpha"}</strong>
+            <p>
+              {encryption === "application-encrypted"
+                ? "Application-level vault encryption is active for this packaged Windows build. Cloud AI transfer remains a separate boundary."
+                : "Application-level encryption is not implemented yet. Use non-sensitive test data."}
+            </p>
           </div>
         </div>
       </aside>

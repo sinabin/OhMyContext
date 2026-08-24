@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -54,7 +54,16 @@ import {
 import {
   prepareEncryptedVaultSmoke,
   runEncryptedVaultSmoke,
+  loadPackagedEncryptedSqliteRuntime,
 } from "./encrypted-vault-smoke.js";
+import { createEncryptedSqliteProvider } from "./encrypted-sqlite-provider.js";
+import {
+  ElectronSafeStorageKeyProtector,
+} from "./vault-key-envelope.js";
+import {
+  WINDOWS_ENCRYPTED_VAULT_FILE_NAME,
+  openWindowsEncryptedVaultCandidate,
+} from "./vault-key-manager.js";
 import {
   prepareGuiSmoke,
   runGuiSmokeJourney,
@@ -103,17 +112,40 @@ function trustedWindowFor(event: IpcMainInvokeEvent): BrowserWindow {
 }
 
 function databasePath(): string {
-  return join(app.getPath("userData"), "owncontext.sqlite");
+  return shouldUsePackagedEncryption()
+    ? join(app.getPath("userData"), "encrypted-vault", WINDOWS_ENCRYPTED_VAULT_FILE_NAME)
+    : join(app.getPath("userData"), "owncontext.sqlite");
+}
+
+function shouldUsePackagedEncryption(): boolean {
+  return app.isPackaged && process.platform === "win32" && process.arch === "x64";
+}
+
+function encryptedVaultRootPath(): string {
+  return join(app.getPath("userData"), "encrypted-vault");
+}
+
+async function initializeVault(resourcesPath: string): Promise<void> {
+  if (vault) return;
+  if (shouldUsePackagedEncryption()) {
+    mkdirSync(encryptedVaultRootPath(), { recursive: true, mode: 0o700 });
+    const runtime = loadPackagedEncryptedSqliteRuntime(resourcesPath);
+    const opened = await openWindowsEncryptedVaultCandidate({
+      rootPath: encryptedVaultRootPath(),
+      provider: createEncryptedSqliteProvider(runtime),
+      protector: new ElectronSafeStorageKeyProtector(safeStorage),
+    });
+    vault = opened.vault;
+    return;
+  }
+  vault = openVault(
+    databasePath(),
+    createNodeSqliteDevelopmentStorageProvider(),
+  );
 }
 
 function requireVault(): Vault {
-  if (!vault) {
-    vault = openVault(
-      databasePath(),
-      createNodeSqliteDevelopmentStorageProvider(),
-    );
-  }
-
+  if (!vault) throw new Error("OwnContext vault is not initialized.");
   return vault;
 }
 
@@ -368,13 +400,16 @@ function startDesktopApp(
   claudeCodeConfig: ClaudeCodeConfigService,
   guiSmoke?: GuiSmokeContext,
 ): void {
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    await initializeVault(process.resourcesPath);
     ipcMain.handle("vault:status", (event) => {
       trustedWindowFor(event);
       return {
         ready: true,
         mode: "Local vault + bounded AI context and provenance",
-        encryption: "not-implemented" as const,
+        encryption: shouldUsePackagedEncryption()
+          ? ("application-encrypted" as const)
+          : ("not-implemented" as const),
       };
     });
 
@@ -620,6 +655,9 @@ function startDesktopApp(
         createWindow();
       }
     });
+  }).catch((error: unknown) => {
+    console.error("OwnContext failed to initialize the local vault.", error);
+    app.exit(1);
   });
 
   app.on("before-quit", (event) => {

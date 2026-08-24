@@ -53,7 +53,7 @@ contextBridge.exposeInMainWorld("ownContext", api);
 export interface VaultStatus {
   ready: boolean;
   mode: string;
-  encryption: "not-implemented";
+  encryption: "not-implemented" | "application-encrypted";
 }
 
 export interface ImportResponse {
