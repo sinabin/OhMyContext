@@ -18,6 +18,7 @@ coverage/
 artifacts/
 release/
 out/
+/output/
 .forge-runtime/
 .DS_Store
 Thumbs.db
