@@ -9,7 +9,7 @@ import {
   type BigIntStats,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, parse, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import type {
   EncryptedVaultCandidateOpenRequest,
   EncryptedVaultCandidateProvider,
@@ -303,6 +303,7 @@ function isExactKeyBuffer(value: unknown): value is Buffer {
 function assertRealDirectory(directoryPath: string): void {
   const stat = lstatSync(directoryPath, { bigint: true });
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid parent.");
+  assertNoReparseAncestor(directoryPath);
   if (!sameResolvedPath(realpathSync.native(directoryPath), directoryPath)) {
     throw new Error("Non-canonical parent.");
   }
@@ -339,6 +340,7 @@ function openExistingRegularFile(location: string): OpenFileGuard {
   if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1n) {
     throw new Error("Invalid target.");
   }
+  assertNoReparseAncestor(location);
   if (!sameResolvedPath(realpathSync.native(location), location)) {
     throw new Error("Non-canonical target.");
   }
@@ -370,6 +372,7 @@ function openExistingRegularFile(location: string): OpenFileGuard {
 function assertGuardStable(guard: OpenFileGuard): void {
   const opened = fstatSync(guard.descriptor, { bigint: true });
   const current = lstatSync(guard.location, { bigint: true });
+  assertNoReparseAncestor(guard.location);
   if (
     !opened.isFile() ||
     opened.nlink !== 1n ||
@@ -389,7 +392,25 @@ function sameFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
 }
 
 function sameResolvedPath(left: string, right: string): boolean {
-  return left.toLowerCase() === resolve(right).toLowerCase();
+  const normalizedRight = resolve(right);
+  const canonicalParent = realpathSync.native(dirname(normalizedRight));
+  const canonicalRight = join(canonicalParent, basename(normalizedRight));
+  return left.toLowerCase() === canonicalRight.toLowerCase();
+}
+
+function assertNoReparseAncestor(candidate: string): void {
+  const normalized = resolve(candidate);
+  const parsed = parse(normalized);
+  let cursor = parsed.root;
+  const segments = normalized
+    .slice(parsed.root.length)
+    .split(/[\\/]+/u)
+    .filter((segment) => segment.length > 0);
+  for (const segment of segments) {
+    cursor = join(cursor, segment);
+    const stat = lstatSync(cursor, { bigint: true });
+    if (stat.isSymbolicLink()) throw new Error("Reparse ancestor.");
+  }
 }
 
 function assertSidecarsSafe(
@@ -416,6 +437,7 @@ function assertSidecarsSafe(
     ) {
       throw new Error("Invalid sidecar.");
     }
+    assertNoReparseAncestor(sidecarPath);
   }
 }
 
