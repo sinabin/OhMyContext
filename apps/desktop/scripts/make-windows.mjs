@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -78,6 +78,24 @@ async function requirePackagedDirectory() {
   }
 }
 
+async function requirePublicVersionMetadata() {
+  if (!releaseProfile.publicRelease) return;
+  const rootPackage = JSON.parse(
+    await readFile(resolve(projectRoot, "package.json"), "utf8"),
+  );
+  const desktopPackage = JSON.parse(
+    await readFile(resolve(desktopDirectory, "package.json"), "utf8"),
+  );
+  if (
+    rootPackage.version !== releaseProfile.version ||
+    desktopPackage.version !== releaseProfile.version
+  ) {
+    throw new Error(
+      "The public release version must match both root and desktop package metadata.",
+    );
+  }
+}
+
 async function run(label, args) {
   process.stdout.write(`\n[OwnContext make] ${label}\n`);
   await new Promise((resolvePromise, rejectPromise) => {
@@ -111,6 +129,7 @@ async function verifyMakerInputs(label) {
 }
 
 await requireMissingBuildDirectory();
+await requirePublicVersionMetadata();
 
 if (!packageOnly) {
   await verifyMakerInputs("verify pinned Squirrel maker package before Forge loads it");
@@ -135,7 +154,7 @@ await run("generate draft compliance evidence", [
   complianceDirectory,
   "--project-root",
   projectRoot,
-  "--draft",
+  ...(releaseProfile.publicRelease ? [] : ["--draft"]),
 ]);
 
 await run("verify draft compliance evidence", [
@@ -147,7 +166,7 @@ await run("verify draft compliance evidence", [
   complianceDirectory,
   "--project-root",
   projectRoot,
-  "--draft",
+  ...(releaseProfile.publicRelease ? [] : ["--draft"]),
 ]);
 
 if (!packageOnly) {

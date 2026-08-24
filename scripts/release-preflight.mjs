@@ -5,6 +5,10 @@ import { lstat, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  validateCleanMachineEvidence,
+  validateSecurityReleaseAttestation,
+} from "./release-evidence.mjs";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -28,6 +32,15 @@ async function regularFile(candidate) {
 async function readJson(relativePath) {
   try {
     return JSON.parse(await readFile(resolve(projectRoot, relativePath), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+async function readEvidence(candidate) {
+  if (!candidate || !(await regularFile(candidate))) return undefined;
+  try {
+    return JSON.parse(await readFile(candidate, "utf8"));
   } catch {
     return undefined;
   }
@@ -138,20 +151,24 @@ async function inspect() {
   );
 
   const securityEvidence = envPath("OWNCONTEXT_SECURITY_ATTESTATION_FILE");
-  const securityReady = securityEvidence !== null && await regularFile(securityEvidence);
+  const securityRecord = await readEvidence(securityEvidence);
+  const securityValidation = validateSecurityReleaseAttestation(securityRecord);
+  const securityReady = securityValidation.ok;
   addCheck(
     "security-attestation",
     securityReady,
-    securityReady ? "release security attestation file is present" : "no release security attestation evidence is present",
+    securityReady ? "release security attestation passed" : securityValidation.reason,
     "Attach evidence covering encrypted normal desktop/MCP storage, sidecars, backups, crash/restart recovery, races, DACLs, key rotation, and parser boundaries.",
   );
 
   const lifecycleEvidence = envPath("OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE");
-  const lifecycleReady = lifecycleEvidence !== null && await regularFile(lifecycleEvidence);
+  const lifecycleRecord = await readEvidence(lifecycleEvidence);
+  const lifecycleValidation = validateCleanMachineEvidence(lifecycleRecord);
+  const lifecycleReady = lifecycleValidation.ok;
   addCheck(
     "clean-machine-lifecycle",
     lifecycleReady,
-    lifecycleReady ? "clean-machine lifecycle evidence file is present" : "no disposable clean-machine lifecycle evidence is present",
+    lifecycleReady ? "clean-machine lifecycle evidence passed" : lifecycleValidation.reason,
     "Run the installed lifecycle harness on a disposable GitHub-hosted windows-latest runner and retain its source-bound evidence.",
   );
 
