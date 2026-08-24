@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 export const PACKAGED_CLIENT_SMOKE_TIMEOUT_MS = 30_000;
 export const PACKAGED_CLIENT_SMOKE_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -48,6 +48,11 @@ export async function resolveSourceBoundPackagedBuild({
   validateBuildIdentifier,
 }) {
   const validatedIdentifier = validateBuildIdentifier(buildIdentifier);
+  const publicBuild = validatedIdentifier.startsWith("public-");
+  const packagedDirectoryName = publicBuild
+    ? "OwnContext-win32-x64"
+    : "OwnContext Developer Preview-win32-x64";
+  const executableName = publicBuild ? "OwnContext.exe" : "OwnContextDeveloperPreview.exe";
   const canonicalOut = await resolveSafeWindowsDirectory(outDirectory);
   if (!canonicalOut) throw new PackagedClientSmokeError("unsafe_out_directory");
 
@@ -59,7 +64,7 @@ export async function resolveSourceBoundPackagedBuild({
   }
 
   const packagedDirectory = await resolveSafeWindowsDirectory(
-    join(buildDirectory, "OwnContext Developer Preview-win32-x64"),
+    join(buildDirectory, packagedDirectoryName),
   );
   if (!packagedDirectory || !isStrictDescendant(buildDirectory, packagedDirectory)) {
     throw new PackagedClientSmokeError("missing_packaged_directory");
@@ -67,7 +72,7 @@ export async function resolveSourceBoundPackagedBuild({
 
   const executable = await resolveLocalRegularFileWithin(
     packagedDirectory,
-    join(packagedDirectory, "OwnContextDeveloperPreview.exe"),
+    join(packagedDirectory, executableName),
   );
   const resourcesDirectory = await resolveSafeWindowsDirectory(
     join(packagedDirectory, "resources"),
@@ -446,7 +451,8 @@ export async function listPackagedMcpProcessIds({
   const powershell = [
     "$ErrorActionPreference = 'Stop'",
     "$targetExecutable = [Environment]::GetEnvironmentVariable('OWNCONTEXT_SMOKE_EXECUTABLE')",
-    "$records = @(Get-CimInstance Win32_Process -Filter \"Name='OwnContextDeveloperPreview.exe'\" | ForEach-Object {",
+    "$targetProcessName = [Environment]::GetEnvironmentVariable('OWNCONTEXT_SMOKE_PROCESS_NAME')",
+    "$records = @(Get-CimInstance Win32_Process -Filter \"Name='$targetProcessName'\" | ForEach-Object {",
     "  if (-not $_.ExecutablePath -or -not $_.CommandLine) { return }",
     "  if ([string]::Equals($_.ExecutablePath, $targetExecutable, [StringComparison]::OrdinalIgnoreCase)) {",
     "    [ordered]@{",
@@ -464,6 +470,7 @@ export async function listPackagedMcpProcessIds({
     environment: {
       ...environment,
       OWNCONTEXT_SMOKE_EXECUTABLE: executable,
+      OWNCONTEXT_SMOKE_PROCESS_NAME: basename(executable),
   },
     timeoutMs: 10_000,
     maxStdoutBytes: 16 * 1024,
@@ -718,7 +725,7 @@ async function verifySourceBoundRuntime({
   if (
     !isJsonObject(checksumEvidence) ||
     checksumEvidence.relativePath !==
-      "OwnContext Developer Preview-win32-x64/resources/compliance/SHA256SUMS" ||
+      `${basename(packagedDirectory)}/resources/compliance/SHA256SUMS` ||
     !Number.isSafeInteger(checksumEvidence.size) ||
     checksumEvidence.size < 1 ||
     checksumEvidence.size > MAX_PAYLOAD_CHECKSUM_BYTES ||

@@ -24,7 +24,10 @@ const CHECKSUM_NAME = "OWNCONTEXT-RELEASE-SHA256SUMS";
 const SOURCE_LOCK_NAME = "SOURCE-package-lock.json";
 const MAKER_EVIDENCE_NAME = "SQUIRREL-MAKER-PROVENANCE.json";
 const KEY_STORAGE_EVIDENCE_NAME = "WINDOWS-KEY-STORAGE-SMOKE.json";
-const PACKAGED_DIRECTORY_NAME = "OwnContext Developer Preview-win32-x64";
+const PUBLIC_PROFILE_REQUESTED = process.env.OWNCONTEXT_RELEASE_PROFILE === "public";
+const PACKAGED_DIRECTORY_NAME = PUBLIC_PROFILE_REQUESTED
+  ? "OwnContext-win32-x64"
+  : "OwnContext Developer Preview-win32-x64";
 const MAKER_RELATIVE_DIRECTORY = "make/squirrel.windows/x64";
 const EVIDENCE_RELATIVE_DIRECTORY = "evidence";
 const COMPLIANCE_NAMES = [
@@ -184,16 +187,17 @@ async function renderReleaseBundle(context, signatureInspector, sourceInspector)
     .join("\n")}\n`;
   const releaseChecksumsBytes = Buffer.from(releaseChecksums, "utf8");
   const blockers = publicReleaseBlockers(project, source, authenticode);
+  const publicRelease = PUBLIC_PROFILE_REQUESTED && blockers.length === 0;
   const manifest = {
     schemaVersion: 1,
-    status: "DRAFT — NOT FOR PUBLIC RELEASE",
+    status: publicRelease ? "PUBLIC RELEASE" : "DRAFT — NOT FOR PUBLIC RELEASE",
     product: "OwnContext",
     release: {
-      releaseId: `owncontext-v${project.version}-windows-x64-${source.commit.slice(0, 12)}-draft`,
+      releaseId: `owncontext-v${project.version}-windows-x64-${source.commit.slice(0, 12)}${publicRelease ? "" : "-draft"}`,
       version: project.version,
-      channel: "developer-alpha",
+      channel: publicRelease ? "stable" : "developer-alpha",
       platform: "Windows x64",
-      publicRelease: false,
+      publicRelease,
     },
     source,
     projectLicense: project.license,
@@ -206,7 +210,7 @@ async function renderReleaseBundle(context, signatureInspector, sourceInspector)
       entryCount: checksumEntries.length,
     },
     readiness: {
-      publicRelease: false,
+      publicRelease,
       blockers,
       boundary:
         "This bundle binds an unsigned developer-alpha candidate to source and local evidence. It does not authorize redistribution or prove the remaining security, licensing, signing, update, or clean-machine gates.",
@@ -564,13 +568,26 @@ function parseJsonBytes(bytes, label) {
 }
 
 function publicReleaseBlockers(project, source, authenticode) {
-  const blockers = [
-    "clean-machine-lifecycle-not-verified",
-    "draft-compliance-evidence",
-    "public-security-gates-not-attested",
-    "signed-public-build-profile-not-implemented",
-    "update-channel-not-configured",
-  ];
+  const blockers = [];
+  if (!PUBLIC_PROFILE_REQUESTED) {
+    blockers.push(
+      "clean-machine-lifecycle-not-verified",
+      "draft-compliance-evidence",
+      "public-security-gates-not-attested",
+      "signed-public-build-profile-not-implemented",
+      "update-channel-not-configured",
+    );
+  } else {
+    if (!process.env.OWNCONTEXT_SECURITY_ATTESTATION_FILE) {
+      blockers.push("public-security-gates-not-attested");
+    }
+    if (!process.env.OWNCONTEXT_CLEAN_MACHINE_EVIDENCE_FILE) {
+      blockers.push("clean-machine-lifecycle-not-verified");
+    }
+    if (!/^https:\/\/[^/\s]+/u.test(process.env.OWNCONTEXT_UPDATE_URL ?? "")) {
+      blockers.push("update-channel-not-configured");
+    }
+  }
   if (project.version === "0.0.0" || project.version.startsWith("0.0.0-")) {
     blockers.push("placeholder-version");
   }
@@ -1080,7 +1097,7 @@ function bundleResult(context, manifest) {
     manifestPath: context.manifestPath,
     releaseChecksumsPath: context.releaseChecksumsPath,
     releaseId: manifest.release.releaseId,
-    publicRelease: false,
+    publicRelease: manifest.release.publicRelease === true,
     blockerCount: manifest.readiness.blockers.length,
   };
 }

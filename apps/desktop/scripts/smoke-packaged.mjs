@@ -51,16 +51,18 @@ import {
 import { assertOfflineNuspecMetadata } from "./nuspec-offline-policy.mjs";
 import { verifySquirrelMakerProvenance } from "./squirrel-maker-provenance.mjs";
 import { verifySquirrelPackageInventory } from "./squirrel-package-inventory.mjs";
+import { resolveReleaseProfile } from "./release-profile.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(scriptsDirectory, "..");
 const projectRoot = resolve(desktopDirectory, "..", "..");
 const outDirectory = resolve(desktopDirectory, "out");
 const requireMaker = process.argv.includes("--require-maker");
-const squirrelPackageName = "OwnContextDeveloperPreview";
-const applicationExecutableName = "OwnContextDeveloperPreview.exe";
-const setupFileName = "OwnContext-Developer-Preview-Unsigned-Setup.exe";
-const fullPackageFileName = `${squirrelPackageName}-0.0.0-full.nupkg`;
+const releaseProfile = resolveReleaseProfile();
+const squirrelPackageName = releaseProfile.squirrelName;
+const applicationExecutableName = `${releaseProfile.executableName}.exe`;
+const setupFileName = releaseProfile.setupExe;
+const fullPackageFileName = `${squirrelPackageName}-${releaseProfile.publicRelease ? releaseProfile.version : "0.0.0"}-full.nupkg`;
 const keyStorageEvidenceFileName = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;
@@ -94,7 +96,7 @@ async function findPackagedDirectory() {
     const requestedPackage = resolve(
       outDirectory,
       buildIdentifier,
-      "OwnContext Developer Preview-win32-x64",
+      releaseProfile.packagedDirectoryName,
     );
     const metadata = await stat(requestedPackage);
     if (!metadata.isDirectory()) {
@@ -116,7 +118,7 @@ async function findPackagedDirectory() {
           "make",
           "squirrel.windows",
           "x64",
-          "OwnContextDeveloperPreview-0.0.0-full.nupkg",
+          fullPackageFileName,
         );
         if (!requireMaker || existsSync(makerPackage)) candidates.push(child);
       } else if (remainingDepth > 0 && entry.name !== "make") {

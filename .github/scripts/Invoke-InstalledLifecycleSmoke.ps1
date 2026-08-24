@@ -521,7 +521,7 @@ $build = Assert-RegularDirectory $BuildDirectory "Forge build directory"
 if (
   -not (Test-StrictDescendant $outRoot $build) -or
   [IO.Directory]::GetParent($build).FullName -ne $outRoot -or
-  [IO.Path]::GetFileName($build) -notmatch "^unsigned-[0-9TZ.-]+-[0-9]+$"
+  [IO.Path]::GetFileName($build) -notmatch "^(unsigned|public)-[0-9TZ.-]+-[0-9]+$"
 ) {
   Throw-BoundaryFailure "the requested build is not one exact unsigned Forge build directory."
 }
@@ -529,17 +529,33 @@ if (
 $manifestPath = Join-Path $build "evidence\$ReleaseManifestName"
 $manifest = (Read-BoundedUtf8 $manifestPath) | ConvertFrom-Json -Depth 30
 $commit = $env:GITHUB_SHA.ToLowerInvariant()
+$publicRelease = [bool]$manifest.release.publicRelease
+if ($publicRelease) {
+  $ProductPackageId = "OwnContext"
+  $ProductTitle = "OwnContext"
+  $ProductPublisher = "NextH and OwnContext contributors"
+  $ProductProcessName = "OwnContext"
+  $ApplicationExecutableName = "OwnContext.exe"
+  $SetupFileName = "OwnContext-Setup.exe"
+  $expectedPackagedDirectoryName = "OwnContext-win32-x64"
+  $expectedProductName = "OwnContext"
+} else {
+  $expectedPackagedDirectoryName = "OwnContext Developer Preview-win32-x64"
+  $expectedProductName = "$ProductTitle (Unsigned)"
+}
 if (
   $manifest.schemaVersion -ne 1 -or
-  $manifest.status -ne "DRAFT — NOT FOR PUBLIC RELEASE" -or
+  (($publicRelease -and $manifest.status -ne "PUBLIC RELEASE") -or
+    (-not $publicRelease -and $manifest.status -ne "DRAFT — NOT FOR PUBLIC RELEASE")) -or
   $manifest.product -ne "OwnContext" -or
   $manifest.release.platform -ne "Windows x64" -or
-  $manifest.release.channel -ne "developer-alpha" -or
-  $manifest.release.publicRelease -ne $false -or
+  (($publicRelease -and $manifest.release.channel -ne "stable") -or
+    (-not $publicRelease -and $manifest.release.channel -ne "developer-alpha")) -or
+  $manifest.release.publicRelease -ne $publicRelease -or
   $manifest.source.commit -ne $commit -or
   $manifest.source.trackedWorktreeClean -ne $true
 ) {
-  Throw-BoundaryFailure "source-bound release manifest does not match this CI revision and draft boundary."
+  Throw-BoundaryFailure "source-bound release manifest does not match this CI revision and release boundary."
 }
 $releaseVersion = [string]$manifest.release.version
 if ($releaseVersion -notmatch "^[0-9]+[.][0-9]+[.][0-9]+$") {
@@ -697,7 +713,7 @@ try {
   ) "installed compliance checksums" $MaximumTextFileBytes
 
   $packagedRoot = Assert-RegularDirectory (
-    Join-Path $build "OwnContext Developer Preview-win32-x64"
+    Join-Path $build $expectedPackagedDirectoryName
   ) "verified unpacked package"
   foreach ($comparison in @(
     @($installedExecutable, (Join-Path $packagedRoot $ApplicationExecutableName), "application executable"),
@@ -715,7 +731,7 @@ try {
   if (
     $versionInfo.FileVersion -ne $releaseVersion -or
     $versionInfo.ProductVersion -ne $releaseVersion -or
-    $versionInfo.ProductName -ne "$ProductTitle (Unsigned)" -or
+    $versionInfo.ProductName -ne $expectedProductName -or
     $versionInfo.OriginalFilename -ne $ApplicationExecutableName
   ) {
     throw "Installed executable version metadata is not exact."
