@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -138,10 +139,11 @@ describe("Claude Code OwnContext MCP configuration service", () => {
       bin: { claude: "bin/claude.exe" },
     });
 
+    const canonicalNativePackageBin = await realpath(nativePackageBin);
     await expect(discoverClaudeCodeCommand({
       platform: "win32",
       environment: { PATH: npmBin },
-    })).resolves.toEqual({ commandPath: nativePackageBin, prefixArgs: [] });
+    })).resolves.toEqual({ commandPath: canonicalNativePackageBin, prefixArgs: [] });
 
     await rm(nativePackageBin);
     await expect(discoverClaudeCodeCommand({
