@@ -127,10 +127,12 @@ and matching local/central headers, recomputed CRC-32, no extra/comment/gap or
 trailing bytes, and fixed non-path attributes. Fixed PE headers and sections must
 retain their approved bytes, changed layout fields must equal values derived
 from the resource size and alignments, and the resource tree permits only the
-reviewed metadata, payloads, and padding. The setup version resource is pinned;
+reviewed metadata, payloads, and padding. The setup version resource is bound
+to the selected release profile's version and description;
 the execution stub's resource keys and bytes must come from the verified
-packaged application executable. NuGet product XML is either byte-pinned or
-matched to a canonical form with only bounded random identifiers. A
+packaged application executable. NuGet content types are byte-pinned; product
+XML is profile-bound and matched to a canonical form with only bounded random
+identifiers. A
 deterministic draft record is created
 atomically under the build's `evidence` directory.
 

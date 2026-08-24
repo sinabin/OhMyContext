@@ -72,6 +72,14 @@ if (
 const applicationExecutableName = `${releaseProfile.executableName}.exe`;
 const setupFileName = releaseProfile.setupExe;
 const fullPackageFileName = `${squirrelPackageName}-${releaseProfile.publicRelease ? releaseProfile.version : projectVersion}-full.nupkg`;
+const productMetadata = Object.freeze({
+  executableName: releaseProfile.executableName,
+  squirrelName: releaseProfile.squirrelName,
+  version: releaseProfile.publicRelease ? releaseProfile.version : projectVersion,
+  productName: releaseProfile.productName,
+  description: releaseProfile.description,
+  copyright: releaseProfile.copyright,
+});
 const keyStorageEvidenceFileName = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const maxNupkgCompressedBytes = 2 * 1024 * 1024 * 1024;
 const maxNupkgEntryBytes = 2 * 1024 * 1024 * 1024;
@@ -613,6 +621,7 @@ if (requireMaker) {
     setupFileName,
     fullPackageFileName,
     applicationExecutableName,
+    product: productMetadata,
     evidenceRoot: buildDirectory,
     evidencePath: resolve(
       buildDirectory,

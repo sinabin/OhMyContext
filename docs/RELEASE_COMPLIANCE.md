@@ -113,18 +113,20 @@ layout fields must equal values derived from the resource size and file/section
 alignments. No overlay or unexpected section is accepted. A strict resource
 walker rejects nested metadata changes, aliases, overlaps, out-of-range data,
 non-zero reserved fields, and bytes outside zero or the exact maker padding
-pattern. The setup version resource is pinned, and its single `DATA/131`
-resource must be a four-entry safe ZIP whose package, `RELEASES`, `Update.exe`,
+pattern. The setup version resource is bound to the selected release profile's
+version and description, and its single `DATA/131` resource must be a four-entry safe ZIP whose package, `RELEASES`, `Update.exe`,
 and background bytes match their approved siblings. Its local headers,
 compressed ranges, central directory, and EOCD are walked directly: names,
 flags, methods, lengths, CRC-32, and offsets must agree; extras, comments,
 attributes, gaps, and trailing bytes are rejected. The `.nupkg` copy of
 `squirrel.exe` must match the approved input. The resource-modified execution
 stub must retain the approved fixed PE origin, while all 52 resource keys and
-bytes must match the verified packaged application executable. NuGet's nuspec,
-content types, and core-properties XML are byte-pinned; relationships XML is
-matched to an exact canonical structure with only its two bounded random IDs
-and randomized core-properties path allowed. Passing evidence
+bytes must match the verified packaged application executable. NuGet's content
+types remain byte-pinned; the nuspec and core-properties XML are bound to the
+selected product name, version, description, and copyright fields, while
+relationships XML is matched to an exact profile-specific canonical structure
+with only its two bounded random IDs and randomized core-properties path
+allowed. Passing evidence
 is written atomically, without timestamps or absolute paths, to
 `out/<build-id>/evidence/SQUIRREL-MAKER-PROVENANCE.json`.
 

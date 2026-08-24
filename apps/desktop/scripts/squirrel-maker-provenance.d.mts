@@ -82,6 +82,14 @@ export interface SquirrelMakerProvenanceEvidence {
   verifier: string;
   approvedInput: PinnedMakerInputsEvidence;
   makerOutput: {
+    product: {
+      executableName: string;
+      squirrelName: string;
+      version: string;
+      productName: string;
+      description: string;
+      copyright: string;
+    };
     files: string[];
     setup: {
       name: string;
@@ -89,6 +97,11 @@ export interface SquirrelMakerProvenanceEvidence {
       sha256: string;
       pe: PeOriginEvidence;
       resourceLayout: ResourceLayoutEvidence;
+      versionResource: {
+        length: number;
+        sha256: string;
+        transform: "profile-bound-version-resource";
+      };
       embeddedZip: Array<{
         name: string;
         length: number;
@@ -212,6 +225,14 @@ export function verifySquirrelMakerProvenance(options: {
   setupFileName: string;
   fullPackageFileName: string;
   applicationExecutableName: string;
+  product: {
+    executableName: string;
+    squirrelName: string;
+    version: string;
+    productName: string;
+    description: string;
+    copyright: string;
+  };
   evidenceRoot?: string;
   evidencePath?: string;
 }): Promise<SquirrelMakerProvenanceEvidence>;

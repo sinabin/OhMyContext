@@ -46,10 +46,6 @@ const SQUIRREL_RESOURCE_PADDING = Buffer.from("PADDINGXXPADDING", "ascii");
 const CANONICAL_RESOURCE_BYTES = Uint8Array.from([
   0x4f, 0x57, 0x4e, 0x43, 0x4f, 0x4e, 0x54, 0x45, 0x58, 0x54,
 ]).buffer;
-const EXPECTED_SETUP_VERSION_RESOURCE = {
-  length: 1_076,
-  sha256: "753c09076a46cec848ad7bf0294c2743ae4f9c5bb87ad56609a30ef9d7bcebc7",
-};
 const NUGET_CORE_PROPERTIES =
   /^package\/services\/metadata\/core-properties\/[0-9a-f]{32}\.psmdcp$/u;
 const PINNED_NUGET_METADATA = new Map([
@@ -62,12 +58,6 @@ const PINNED_NUGET_METADATA = new Map([
     sha256: "5f2b461b10b1ad19ebb1679fbded61a87a239eed2523390054138df0832e5c4d",
   }],
 ]);
-const PINNED_NUGET_CORE_PROPERTIES = {
-  length: 745,
-  sha256: "bd03203956fdf72c1c86b8e27a16e037036bddc1c1f2845ea7c72b3cf961f33f",
-};
-const NORMALIZED_NUGET_RELATIONSHIPS =
-  "\ufeff<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Type=\"http://schemas.microsoft.com/packaging/2010/07/manifest\" Target=\"/OwnContextDeveloperPreview.nuspec\" Id=\"R<id>\" /><Relationship Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"/<core>\" Id=\"R<id>\" /></Relationships>";
 const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
   let value = index;
   for (let bit = 0; bit < 8; bit += 1) {
@@ -86,6 +76,64 @@ function comparePaths(left, right) {
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function decodeUtf8(bytes, label, preserveBom = false) {
+  try {
+    return new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: preserveBom,
+    }).decode(bytes);
+  } catch {
+    throw new Error(`${label} is not valid UTF-8.`);
+  }
+}
+
+function xmlField(text, name, label) {
+  const escaped = name.replace(/[.*+?^$()|[\]\\]/gu, "\\$&");
+  const match = text.match(new RegExp(`<${escaped}>([^<]*)</${escaped}>`, "u"));
+  if (!match) throw new Error(`${label} is missing XML field ${name}.`);
+  return match[1];
+}
+
+function countBytes(haystack, needle) {
+  let count = 0;
+  let offset = 0;
+  while (offset <= haystack.length - needle.length) {
+    const found = haystack.indexOf(needle, offset);
+    if (found < 0) break;
+    count += 1;
+    offset = found + 1;
+  }
+  return count;
+}
+
+function verifyProfileVersionResource(bytes, product) {
+  const buffer = Buffer.from(bytes);
+  const requiredStrings = [
+    "VS_VERSION_INFO",
+    "StringFileInfo",
+    "VarFileInfo",
+    "Translation",
+  ];
+  for (const value of requiredStrings) {
+    if (!buffer.includes(Buffer.from(value, "utf16le"))) {
+      throw new Error(`Setup.exe version resource is missing ${value}.`);
+    }
+  }
+  const versionBytes = Buffer.from(`${product.version}\0`, "utf16le");
+  if (countBytes(buffer, versionBytes) < 2) {
+    throw new Error("Setup.exe version resource is not bound to the release version.");
+  }
+  const descriptionBytes = Buffer.from(`${product.description}\0`, "utf16le");
+  if (countBytes(buffer, descriptionBytes) < 2) {
+    throw new Error("Setup.exe version resource is not bound to the release description.");
+  }
+  return {
+    length: buffer.length,
+    sha256: sha256(buffer),
+    transform: "profile-bound-version-resource",
+  };
 }
 
 export function verifyPinnedNugetProductMetadata(name, bytes) {
@@ -895,7 +943,7 @@ function inspectStrictResourceLayout(parsed, expectedEntryCount, label) {
   };
 }
 
-function extractSetupArchive(actualBytes, approvedBytes) {
+function extractSetupArchive(actualBytes, approvedBytes, product) {
   const actualPe = parsePe(actualBytes, "Emitted Setup.exe");
   const approvedPe = parsePe(approvedBytes, "Approved Setup.exe");
   const actual = NtExecutableResource.from(actualPe.executable);
@@ -931,18 +979,15 @@ function extractSetupArchive(actualBytes, approvedBytes) {
     "Emitted Setup.exe",
   );
   const versions = actual.entries.filter((entry) => entry.type === 16 && entry.id === 1);
-  if (
-    versions.length !== 1 ||
-    versions[0].bin.byteLength !== EXPECTED_SETUP_VERSION_RESOURCE.length ||
-    sha256(Buffer.from(versions[0].bin)) !== EXPECTED_SETUP_VERSION_RESOURCE.sha256
-  ) {
-    throw new Error("Emitted Setup.exe version resource differs from the pinned product transform.");
+  if (versions.length !== 1) {
+    throw new Error("Emitted Setup.exe must contain exactly one version resource.");
   }
+  const versionResource = verifyProfileVersionResource(versions[0].bin, product);
   const archives = actual.entries.filter((entry) => entry.type === "DATA" && entry.id === 131);
   if (archives.length !== 1 || archives[0].bin.byteLength === 0) {
     throw new Error("Emitted Setup.exe must contain exactly one non-empty DATA/131 resource.");
   }
-  return { archive: Buffer.from(archives[0].bin), layout };
+  return { archive: Buffer.from(archives[0].bin), layout, versionResource };
 }
 
 export function parseSquirrelReleaseRecord(contents, expectedPackageFileName) {
@@ -1455,24 +1500,80 @@ function verifyExecutionStubResources(stubBytes, applicationBytes) {
   };
 }
 
-function verifyNugetMetadata(found, coreName) {
+function verifyNugetMetadata(found, coreName, product) {
   const evidence = [];
-  for (const name of PINNED_NUGET_METADATA.keys()) {
-    evidence.push(verifyPinnedNugetProductMetadata(name, found.get(name)));
-  }
-  const coreBytes = found.get(coreName);
+  const nuspecName = `${product.executableName}.nuspec`;
+  const nuspecBytes = found.get(nuspecName);
+  const nuspecText = decodeUtf8(nuspecBytes, "Squirrel NuGet nuspec");
   if (
-    !coreBytes ||
-    coreBytes.length !== PINNED_NUGET_CORE_PROPERTIES.length ||
-    sha256(coreBytes) !== PINNED_NUGET_CORE_PROPERTIES.sha256
+    !nuspecText.startsWith('<?xml version="1.0"?>\r\n<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">') ||
+    nuspecText.includes("<iconUrl>")
   ) {
-    throw new Error("Squirrel NuGet core-properties metadata differs from the pinned product transform.");
+    throw new Error("Squirrel NuGet nuspec has unexpected XML metadata.");
+  }
+  const nuspecFields = {
+    id: xmlField(nuspecText, "id", "Squirrel NuGet nuspec"),
+    version: xmlField(nuspecText, "version", "Squirrel NuGet nuspec"),
+    title: xmlField(nuspecText, "title", "Squirrel NuGet nuspec"),
+    authors: xmlField(nuspecText, "authors", "Squirrel NuGet nuspec"),
+    owners: xmlField(nuspecText, "owners", "Squirrel NuGet nuspec"),
+    requireLicenseAcceptance: xmlField(
+      nuspecText,
+      "requireLicenseAcceptance",
+      "Squirrel NuGet nuspec",
+    ),
+    description: xmlField(nuspecText, "description", "Squirrel NuGet nuspec"),
+    copyright: xmlField(nuspecText, "copyright", "Squirrel NuGet nuspec"),
+  };
+  const copyrightSuffix = product.copyright.replace(/^Copyright \(c\)\s*/u, "");
+  const currentYear = String(new Date().getFullYear());
+  if (
+    nuspecFields.id !== product.squirrelName ||
+    nuspecFields.version !== product.version ||
+    nuspecFields.title !== product.productName ||
+    nuspecFields.authors !== "OwnContext project contributors" ||
+    nuspecFields.owners !== "OwnContext project contributors" ||
+    nuspecFields.requireLicenseAcceptance !== "false" ||
+    nuspecFields.description !== product.description ||
+    !nuspecFields.copyright.includes(currentYear) ||
+    !nuspecFields.copyright.endsWith(copyrightSuffix)
+  ) {
+    throw new Error("Squirrel NuGet nuspec is not bound to the release profile.");
+  }
+  evidence.push({
+    name: nuspecName,
+    length: nuspecBytes.length,
+    sha256: sha256(nuspecBytes),
+    transform: "profile-bound-nuspec-fields",
+  });
+  evidence.push(verifyPinnedNugetProductMetadata("[Content_Types].xml", found.get("[Content_Types].xml")));
+
+  const coreBytes = found.get(coreName);
+  const coreText = decodeUtf8(coreBytes, "Squirrel NuGet core-properties", true);
+  const coreFields = {
+    creator: xmlField(coreText, "dc:creator", "Squirrel NuGet core-properties"),
+    description: xmlField(coreText, "dc:description", "Squirrel NuGet core-properties"),
+    identifier: xmlField(coreText, "dc:identifier", "Squirrel NuGet core-properties"),
+    version: xmlField(coreText, "version", "Squirrel NuGet core-properties"),
+    title: xmlField(coreText, "dc:title", "Squirrel NuGet core-properties"),
+    lastModifiedBy: xmlField(coreText, "lastModifiedBy", "Squirrel NuGet core-properties"),
+  };
+  if (
+    coreText.charCodeAt(0) !== 0xfeff ||
+    coreFields.creator !== "OwnContext project contributors" ||
+    coreFields.description !== product.description ||
+    coreFields.identifier !== product.squirrelName ||
+    coreFields.version !== product.version ||
+    coreFields.title !== product.productName ||
+    !coreFields.lastModifiedBy.startsWith("NuGet, Version=")
+  ) {
+    throw new Error("Squirrel NuGet core-properties metadata is not bound to the release profile.");
   }
   evidence.push({
     name: coreName,
     length: coreBytes.length,
-    sha256: PINNED_NUGET_CORE_PROPERTIES.sha256,
-    transform: "pinned-bytes-with-randomized-path",
+    sha256: sha256(coreBytes),
+    transform: "profile-bound-core-properties",
   });
 
   const relationshipsName = "_rels/.rels";
@@ -1481,11 +1582,7 @@ function verifyNugetMetadata(found, coreName) {
     throw new Error("Squirrel NuGet relationships metadata is missing or oversized.");
   }
   let text;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(relationships);
-  } catch {
-    throw new Error("Squirrel NuGet relationships metadata is not valid UTF-8.");
-  }
+  text = decodeUtf8(relationships, "Squirrel NuGet relationships metadata", true);
   const identifiers = text.match(/Id="R[0-9a-f]{16}"/gu) ?? [];
   if (identifiers.length !== 2 || identifiers[0] === identifiers[1]) {
     throw new Error("Squirrel NuGet relationship identifiers are not two distinct bounded values.");
@@ -1493,7 +1590,9 @@ function verifyNugetMetadata(found, coreName) {
   const normalized = text
     .replaceAll(coreName, "<core>")
     .replace(/Id="R[0-9a-f]{16}"/gu, "Id=\"R<id>\"");
-  if (normalized !== NORMALIZED_NUGET_RELATIONSHIPS) {
+  const expectedRelationships =
+    `\ufeff<?xml version="1.0" encoding="utf-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.microsoft.com/packaging/2010/07/manifest" Target="/${nuspecName}" Id="R<id>" /><Relationship Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="/<core>" Id="R<id>" /></Relationships>`;
+  if (normalized !== expectedRelationships) {
     throw new Error("Squirrel NuGet relationships metadata differs from its canonical structure.");
   }
   evidence.push({
@@ -1505,7 +1604,12 @@ function verifyNugetMetadata(found, coreName) {
   return evidence;
 }
 
-async function inspectNupkgExecutables(path, applicationExecutableName, approvedInputs) {
+async function inspectNupkgExecutables(
+  path,
+  applicationExecutableName,
+  approvedInputs,
+  product,
+) {
   const metadata = await lstat(path);
   if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.size > MAX_MAKER_CONTAINER_BYTES) {
     throw new Error("Squirrel full package is not a bounded regular file.");
@@ -1515,7 +1619,7 @@ async function inspectNupkgExecutables(path, applicationExecutableName, approved
   const stubName = `lib/net45/${executableStem}_ExecutionStub.exe`;
   const applicationName = `lib/net45/${applicationExecutableName}`;
   const nuspecName = `${executableStem}.nuspec`;
-  if (!PINNED_NUGET_METADATA.has(nuspecName)) {
+  if (nuspecName !== `${product.executableName}.nuspec`) {
     throw new Error("Squirrel NuGet package identity does not match the pinned product transform.");
   }
   const targets = new Map([
@@ -1589,7 +1693,7 @@ async function inspectNupkgExecutables(path, applicationExecutableName, approved
     "Packaged execution stub",
   );
   const resources = verifyExecutionStubResources(stubBytes, applicationBytes);
-  const nugetMetadata = verifyNugetMetadata(found, coreName);
+  const nugetMetadata = verifyNugetMetadata(found, coreName, product);
   return {
     squirrel: { name: squirrelName, length: squirrelBytes.length, sha256: sha256(squirrelBytes) },
     applicationResourceSource: {
@@ -1732,7 +1836,11 @@ export async function verifySquirrelMakerProvenance(options) {
     inputs.buffers.get("setupBootstrap"),
     "Emitted Setup.exe",
   );
-  const setupResources = extractSetupArchive(setupBytes, inputs.buffers.get("setupBootstrap"));
+  const setupResources = extractSetupArchive(
+    setupBytes,
+    inputs.buffers.get("setupBootstrap"),
+    options.product,
+  );
   const setupEntries = await inspectSetupArchive(setupResources.archive, {
     names: ["background.gif", options.fullPackageFileName, "RELEASES", "Update.exe"],
     fullPackageFileName: options.fullPackageFileName,
@@ -1747,6 +1855,7 @@ export async function verifySquirrelMakerProvenance(options) {
     fullPackagePath,
     options.applicationExecutableName,
     inputs.buffers,
+    options.product,
   );
   const evidence = {
     schemaVersion: 2,
@@ -1759,6 +1868,7 @@ export async function verifySquirrelMakerProvenance(options) {
       files: inputs.files,
     },
     makerOutput: {
+      product: options.product,
       files: expectedNames,
       setup: {
         name: options.setupFileName,
@@ -1766,6 +1876,7 @@ export async function verifySquirrelMakerProvenance(options) {
         sha256: sha256(setupBytes),
         pe: setupPe,
         resourceLayout: setupResources.layout,
+        versionResource: setupResources.versionResource,
         embeddedZip: setupEntries,
       },
       fullPackage: {
