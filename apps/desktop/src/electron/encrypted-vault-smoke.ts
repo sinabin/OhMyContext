@@ -962,7 +962,10 @@ function pathExists(path: string): boolean {
 }
 
 function isStrictDescendant(parent: string, child: string): boolean {
-  const difference = relative(parent, child);
+  const difference = relative(
+    canonicalComparablePath(parent),
+    canonicalComparablePath(child),
+  );
   return difference !== "" &&
     difference !== ".." &&
     !difference.startsWith(`..${sep}`) &&
