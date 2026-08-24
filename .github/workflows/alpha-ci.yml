@@ -108,10 +108,20 @@ jobs:
           OWNCONTEXT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           OWNCONTEXT_RUNNER_LABEL: windows-latest
           OWNCONTEXT_DISPOSABLE_RUNNER_ACK: github-hosted-windows-latest-disposable
-        run: >-
-          & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1
-          -BuildDirectory "$env:OWNCONTEXT_BUILD_DIR"
-          -ExecuteDisposableGitHubHostedLifecycle
+        run: |
+          try {
+            & .github/scripts/Invoke-InstalledLifecycleSmoke.ps1 `
+              -BuildDirectory "$env:OWNCONTEXT_BUILD_DIR" `
+              -ExecuteDisposableGitHubHostedLifecycle
+          } catch {
+            $detail = ($_ | Out-String).Trim()
+            $annotation = ($detail -replace '\s+', ' ')
+            if ($annotation.Length -gt 6000) { $annotation = $annotation.Substring($annotation.Length - 6000) }
+            Write-Output "::error title=installed lifecycle failed::$annotation"
+            "Installed lifecycle failure:" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            $detail | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            throw
+          }
 
       # An unsigned executable must not become a downloadable artifact merely
       # because this verification workflow is later copied into a public repo.
