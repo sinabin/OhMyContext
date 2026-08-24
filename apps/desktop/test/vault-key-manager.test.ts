@@ -749,7 +749,7 @@ windowsDescribe("Windows encrypted vault key manager", () => {
     const protector = new TestProtector();
     await expectManagerError(
       () => openWindowsEncryptedVaultCandidate({
-        rootPath: relative(process.cwd(), root),
+        rootPath: "relative-vault-root",
         provider,
         protector,
       }),
