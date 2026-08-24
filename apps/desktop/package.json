@@ -1,7 +1,7 @@
 {
   "name": "@owncontext/desktop",
   "productName": "OwnContext Developer Preview",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Unsigned local-first OwnContext developer preview for non-sensitive evaluation data.",
   "author": "OwnContext project contributors",
