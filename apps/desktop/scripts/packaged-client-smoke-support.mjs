@@ -122,18 +122,25 @@ export async function resolveSourceBoundPackagedBuild({
   );
   const commit = evidence?.source?.commit;
   const version = evidence?.release?.version;
+  const expectedPublicRelease = publicBuild;
+  const expectedStatus = expectedPublicRelease
+    ? "PUBLIC RELEASE"
+    : "DRAFT — NOT FOR PUBLIC RELEASE";
+  const expectedChannel = expectedPublicRelease ? "stable" : "developer-alpha";
+  const expectedReleaseId = `owncontext-v${version}-windows-x64-${commit?.slice(0, 12)}${expectedPublicRelease ? "" : "-draft"}`;
   if (
     evidence?.schemaVersion !== 1 ||
-    evidence?.status !== "DRAFT — NOT FOR PUBLIC RELEASE" ||
+    evidence?.status !== expectedStatus ||
     evidence?.source?.trackedWorktreeClean !== true ||
     typeof commit !== "string" ||
     !SOURCE_COMMIT_PATTERN.test(commit) ||
     evidence?.release?.platform !== "Windows x64" ||
-    evidence?.release?.publicRelease !== false ||
+    evidence?.release?.publicRelease !== expectedPublicRelease ||
+    evidence?.release?.channel !== expectedChannel ||
     typeof version !== "string" ||
     !SEMVER_PATTERN.test(version) ||
     evidence?.release?.releaseId !==
-      `owncontext-v${version}-windows-x64-${commit.slice(0, 12)}-draft`
+      expectedReleaseId
   ) {
     throw new PackagedClientSmokeError("invalid_source_bound_evidence");
   }
