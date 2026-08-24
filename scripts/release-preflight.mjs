@@ -186,7 +186,9 @@ async function inspect() {
     "source-bound-release-candidate",
     candidateReady,
     candidateReady
-      ? "final public manifest is source-bound to a signed installer"
+      ? publicProfile
+        ? "final public manifest is source-bound to a signed installer"
+        : "not required outside the public release profile"
       : "final public release candidate manifest is missing or still draft",
     "Finalize and verify the public release bundle after clean-machine evidence is generated.",
   );
@@ -201,6 +203,8 @@ async function inspect() {
     securityReady,
     securityReady
       ? "release security attestation passed for the final candidate"
+      : !publicProfile
+        ? "not required outside the public release profile"
       : securityBindingReady
         ? securityValidation.reason
         : "security attestation is not bound to the final public candidate",
@@ -221,6 +225,8 @@ async function inspect() {
     lifecycleReady,
     lifecycleReady
       ? "clean-machine lifecycle evidence passed for the final candidate"
+      : !publicProfile
+        ? "not required outside the public release profile"
       : lifecycleBindingReady
         ? lifecycleValidation.reason
         : "clean-machine evidence is not bound to the final public candidate",
