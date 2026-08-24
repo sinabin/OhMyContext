@@ -2,6 +2,8 @@
 
 No open-source license has been selected yet.
 
+Public release license approval: pending (license decision deferred).
+
 The project intends to become open source, but the maintainer has explicitly
 deferred both the decision and any narrowing of candidates.
 
