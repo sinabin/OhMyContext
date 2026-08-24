@@ -97,7 +97,7 @@ async function requirePublicVersionMetadata() {
 }
 
 async function run(label, args) {
-  process.stdout.write(`\n[OwnContext make] ${label}\n`);
+  process.stdout.write(`\n[OhMyContext make] ${label}\n`);
   await new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: desktopDirectory,
@@ -121,7 +121,7 @@ async function run(label, args) {
 }
 
 async function verifyMakerInputs(label) {
-  process.stdout.write(`\n[OwnContext make] ${label}\n`);
+  process.stdout.write(`\n[OhMyContext make] ${label}\n`);
   await verifyPinnedSquirrelMakerInputs({
     manifestPath: makerInputManifest,
     electronWinstallerDirectory,

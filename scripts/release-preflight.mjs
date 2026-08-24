@@ -251,7 +251,7 @@ async function inspect() {
 
   return {
     schemaVersion: 1,
-    product: "OwnContext",
+    product: "OhMyContext",
     publicRelease: checks.every((check) => check.status === "passed"),
     blockers: checks.filter((check) => check.status === "blocked").map((check) => check.id),
     checks,
@@ -262,7 +262,7 @@ const result = await inspect();
 if (JSON_OUTPUT) {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } else {
-  process.stdout.write(`OwnContext public release: ${result.publicRelease ? "READY" : "BLOCKED"}\n`);
+  process.stdout.write(`OhMyContext public release: ${result.publicRelease ? "READY" : "BLOCKED"}\n`);
   for (const check of result.checks) {
     process.stdout.write(`${check.status === "passed" ? "PASS" : "BLOCK"} ${check.id}: ${check.detail}\n`);
     if (check.status === "blocked") process.stdout.write(`      ${check.remediation}\n`);

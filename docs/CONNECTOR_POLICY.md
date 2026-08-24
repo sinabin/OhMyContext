@@ -4,7 +4,7 @@ Last updated: 2026-08-23
 
 ## Policy decision
 
-OwnContext permits every acquisition route that the project can reasonably establish as lawful and authorized for the intended use. “Technically accessible” is not the same as “permitted.” A connector must document its authority, platform constraints, data scope, and lifecycle before it can ship.
+OhMyContext permits every acquisition route that the project can reasonably establish as lawful and authorized for the intended use. “Technically accessible” is not the same as “permitted.” A connector must document its authority, platform constraints, data scope, and lifecycle before it can ship.
 
 This is a product admission policy, not legal advice and not a universal declaration that a route is lawful in every jurisdiction. Where material uncertainty remains, the route is disabled by default until qualified review or a narrower implementation resolves it.
 
@@ -62,7 +62,7 @@ Every connector must satisfy all of the following before inclusion in an officia
 
 ## Third-party personal and copyrighted content
 
-Personal archives often contain comments, messages, mentions, quoted material, or records about other people. OwnContext therefore applies the following rules even when the primary account belongs to the user:
+Personal archives often contain comments, messages, mentions, quoted material, or records about other people. OhMyContext therefore applies the following rules even when the primary account belongs to the user:
 
 - Collect only what is necessary for the selected personal use and permitted by the acquisition route.
 - Preserve third-party authorship; do not re-label other people's words as the user's knowledge or writing.
@@ -111,7 +111,7 @@ Allowed capture behavior includes:
 - following a user-confirmed, bounded list of links on the same authorized source; and
 - resuming a disclosed capture job with the same bounds and rate limits.
 
-It does not include hidden background browsing, open-ended site crawling, enumerating other users or private spaces, defeating anti-automation measures, or uploading browser cookies to an OwnContext service. Browser integrations must display the active origin and requested scope before capture.
+It does not include hidden background browsing, open-ended site crawling, enumerating other users or private spaces, defeating anti-automation measures, or uploading browser cookies to an OhMyContext service. Browser integrations must display the active origin and requested scope before capture.
 
 ## Connector manifest
 

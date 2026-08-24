@@ -96,7 +96,7 @@ describe("built-in sample library materializer", () => {
     await writeFile(unexpectedPath, "private user content\n", "utf8");
 
     await expect(materializeSampleLibrary(userDataRoot)).rejects.toThrow(
-      "content OwnContext does not own",
+      "content OhMyContext does not own",
     );
     await expect(readFile(expectedPath, "utf8")).resolves.toBe(
       "user changed this file\n",

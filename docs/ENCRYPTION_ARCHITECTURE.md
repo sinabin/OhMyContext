@@ -5,7 +5,7 @@ Last updated: 2026-08-24
 Status: **Packaged Windows desktop vault and MCP broker transport prototype verified; release controls remain open**
 
 This document records the encryption architecture selected for the Windows-first
-OwnContext release. It is an implementation contract and spike plan, not a
+OhMyContext release. It is an implementation contract and spike plan, not a
 security claim. The packaged Windows x64 desktop route now opens the encrypted
 candidate and reports that boundary in the UI. Its MCP child is now a stdio
 bridge to the desktop-owned named-pipe broker and does not receive the vault
@@ -21,7 +21,7 @@ are shortlisted by this architecture.
 
 ## Decision
 
-OwnContext will use this topology on Windows:
+OhMyContext will use this topology on Windows:
 
 ```text
 Codex / another stdio MCP host
@@ -122,7 +122,7 @@ normal product vault:
   SHA-256 hashes are pinned to the exact npm 13.0.3 tarball after its computed
   SHA-512 matched the lockfile SRI. This proves those selected registry-tarball
   bytes, not a source rebuild, Authenticode signature, unselected package files,
-  bundled-library license compatibility, or the OwnContext project license.
+  bundled-library license compatibility, or the OhMyContext project license.
 - The plaintext provider inspects the 100-byte database header and, only when
   both header mode bytes declare WAL, checksum-valid WAL frames through
   read-only file descriptors before it opens SQLite. It caps WAL inspection at
@@ -199,7 +199,7 @@ Primary references:
 ### In scope
 
 When the app is stopped or the vault is locked, a person who copies the
-OwnContext data directory without the Windows user's credentials must not be
+OhMyContext data directory without the Windows user's credentials must not be
 able to recover protected fixture canaries from:
 
 - canonical content, revisions, chunks, titles, paths, URLs, collections, and
@@ -218,7 +218,7 @@ unreadable encrypted vault and must never reopen it through plaintext SQLite.
 
 Windows `safeStorage` uses DPAPI and protects against other users on the same
 machine, not malicious software already running as the same logged-in user.
-OwnContext also cannot protect plaintext while an authorized, unlocked broker
+OhMyContext also cannot protect plaintext while an authorized, unlocked broker
 is serving it, or after an AI client sends an excerpt to an external provider.
 Administrators, malware controlling the session, screenshots, intentional
 exports, and downstream provider retention remain outside the at-rest claim.
@@ -331,7 +331,7 @@ not Node's default security descriptor. The pipe must:
 - use a versioned handshake with fresh nonces and a new random session identifier
   for every connection; nonces provide freshness, while the Windows access token
   and signed-process check provide identity;
-- bind one visible OwnContext connection grant and its collection scope to that
+- bind one visible OhMyContext connection grant and its collection scope to that
   pipe session. Reconnection creates a new authorization/session boundary and
   invalidates search-issued document IDs from the old session; and
 - impose frame length, method, concurrency, timeout, response-size, and idle
@@ -411,7 +411,7 @@ a permanent support claim.
 
 | Candidate | Why spike it | Required evidence | Known rejection/decision boundary |
 | --- | --- | --- | --- |
-| SQLCipher Community source + minimal OwnContext N-API adapter | Strongest control over a raw-byte key API, pinned cipher settings, FTS5 compile flags, and Windows artifacts | Reproducible Windows x64/Electron build; `sqlite3_key_v2`; cipher status/integrity; FTS/WAL parity; complete transitive license/SBOM review | Highest native maintenance and patch burden; adoption waits for license and update-operations review |
+| SQLCipher Community source + minimal OhMyContext N-API adapter | Strongest control over a raw-byte key API, pinned cipher settings, FTS5 compile flags, and Windows artifacts | Reproducible Windows x64/Electron build; `sqlite3_key_v2`; cipher status/integrity; FTS/WAL parity; complete transitive license/SBOM review | Highest native maintenance and patch burden; adoption waits for license and update-operations review |
 | Official SQLCipher Windows distribution behind the same adapter | Vendor-maintained cipher implementation and documented APIs may reduce crypto build risk | Exact redistribution terms/cost; offline reproducible packaging or vendor provenance; Electron-compatible adapter; all acceptance tests | A paid or redistribution-restricted artifact may conflict with a universally free open-source distribution; maintainer decision required |
 | `better-sqlite3-multiple-ciphers` 13.0.3 | Implemented Windows developer candidate for the storage interface and native packaging path | Exact Electron 43 x64 load, selected-file registry hash pins, key-before-page and exact engine/cipher state, FTS/WAL/temp and packaged reopen smoke are verified; source-rebuild equivalence, sidecar-race resolution, full bundled-library license/SBOM review, maintenance and update policy remain | Third-party fork and multiple cipher modes increase configuration/downgrade risk; the implemented spike is not final provider adoption or public approval |
 | `@journeyapps/sqlcipher` | Useful API/reference comparison with an Electron rebuild path | Upstream-supported Windows x64 build and packaged tests | Upstream currently states Windows is unsupported; reject for the Windows-first release unless that boundary changes and is verified |
@@ -555,4 +555,4 @@ has not passed the reproduced sidecar-race gate, full dependency-license and
 source-build review, normal-route broker integration, or the complete at-rest
 matrix. This does not block continued local development with synthetic
 non-sensitive fixtures. It blocks release-complete implementation claims and
-any public statement that OwnContext protects personal vault data at rest.
+any public statement that OhMyContext protects personal vault data at rest.

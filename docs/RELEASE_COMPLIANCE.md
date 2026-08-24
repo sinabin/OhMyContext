@@ -2,11 +2,11 @@
 
 Status: implemented foundation, not a public-release approval.
 
-OwnContext does not yet have a selected open-source license. The commands in
+OhMyContext does not yet have a selected open-source license. The commands in
 this document do not override `LICENSE-STATUS.md`, authorize redistribution, or
 replace legal review. Without `--draft`, the tooling deliberately fails until a
 top-level `LICENSE` and SPDX license metadata exist for the root and every
-OwnContext workspace.
+OhMyContext workspace.
 
 ## Evidence boundary
 
@@ -235,7 +235,7 @@ parser-differential boundary.
 
 The audit is specifically an **application-payload** audit. During make,
 Squirrel adds `lib/net45/squirrel.exe`,
-`lib/net45/OwnContextDeveloperPreview_ExecutionStub.exe`, and package metadata
+`lib/net45/OhMyContextDeveloperPreview_ExecutionStub.exe`, and package metadata
 to the `.nupkg`; `Setup.exe` also carries maker-generated bootstrap/update
 bytes. The provenance gate now checks the executable origins and outer-container
 mapping described above. Those maker-added components are still not inventoried
@@ -285,7 +285,7 @@ source and relinking conditions listed below.
 
 This foundation does not yet prove:
 
-- which OwnContext license the maintainer will select;
+- which OhMyContext license the maintainer will select;
 - that the installed Electron FFmpeg binary has an exact corresponding-source
   archive, patch set, and build configuration available beside the download;
 - that codec patent obligations are satisfied in every target jurisdiction;

@@ -78,7 +78,7 @@ const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 50;
 const DEFAULT_RETRIEVAL_ACTIVITY_LIMIT = 50;
 const RETRIEVAL_AUDIT_BUSY_MESSAGE =
-  "Another vault write is active. No context was returned because OwnContext could not record this access; retry after the import or removal finishes.";
+  "Another vault write is active. No context was returned because OhMyContext could not record this access; retry after the import or removal finishes.";
 export const MAX_RETRIEVAL_ACTIVITY_RESULTS = 100;
 const MAX_SCOPED_RANK_TERMS = 16;
 const DEFAULT_NEIGHBORS = 1;

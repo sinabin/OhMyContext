@@ -1,6 +1,6 @@
 # Security policy
 
-OwnContext is pre-release software and has not completed a security audit. Do not use the current developer prototype for sensitive production data.
+OhMyContext is pre-release software and has not completed a security audit. Do not use the current developer prototype for sensitive production data.
 
 ## Reporting
 

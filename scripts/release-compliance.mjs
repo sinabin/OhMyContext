@@ -606,11 +606,11 @@ async function readImmediateLicenseFiles(packageRoot) {
 
 async function renderThirdPartyNotices(context, components) {
   const lines = [
-    "OwnContext third-party notices",
+    "OhMyContext third-party notices",
     "================================",
     "",
     "Generated from the locked production dependency graph and the unpacked artifact.",
-    "This file does not license OwnContext itself and does not lift LICENSE-STATUS.md.",
+    "This file does not license OhMyContext itself and does not lift LICENSE-STATUS.md.",
     `Project license: ${context.projectLicense}`,
     `Mode: ${context.draft ? "DRAFT — NOT FOR PUBLIC RELEASE" : "RELEASE"}`,
     "",
@@ -635,7 +635,7 @@ async function renderThirdPartyNotices(context, components) {
 }
 
 function renderSpdx(context, components, payloadFiles) {
-  const packageName = String(context.packageJson.name ?? "owncontext");
+  const packageName = String(context.packageJson.name ?? "ohmycontext");
   const packageVersion = String(context.packageJson.version ?? "0.0.0");
   const digest = createHash("sha256")
     .update(
@@ -649,7 +649,7 @@ function renderSpdx(context, components, payloadFiles) {
       }),
     )
     .digest("hex");
-  const rootId = "SPDXRef-Package-owncontext";
+  const rootId = "SPDXRef-Package-ohmycontext";
   const componentPackages = components.map((component) => ({
     name: component.name,
     SPDXID: componentSpdxId(component),
@@ -684,10 +684,10 @@ function renderSpdx(context, components, payloadFiles) {
     dataLicense: "CC0-1.0",
     SPDXID: "SPDXRef-DOCUMENT",
     name: `${packageName}-${packageVersion}-windows-artifact`,
-    documentNamespace: `https://owncontext.dev/spdx/${encodeURIComponent(packageVersion)}/${digest}`,
+    documentNamespace: `https://github.com/sinabin/OhMyContext/spdx/${encodeURIComponent(packageVersion)}/${digest}`,
     creationInfo: {
       created: spdxTimestamp(),
-      creators: [`Tool: OwnContext release-compliance/${TOOL_VERSION}`],
+      creators: [`Tool: OhMyContext release-compliance/${TOOL_VERSION}`],
     },
     packages: [
       {
@@ -725,7 +725,7 @@ function renderSpdx(context, components, payloadFiles) {
           {
             annotationDate: spdxTimestamp(),
             annotationType: "OTHER",
-            annotator: `Tool: OwnContext release-compliance/${TOOL_VERSION}`,
+      annotator: `Tool: OhMyContext release-compliance/${TOOL_VERSION}`,
             comment: `DRAFT — NOT FOR PUBLIC RELEASE. ${context.projectLicenseIssues.join("; ")}`,
           },
         ]
@@ -739,7 +739,7 @@ function verifySpdx(sbom, context, components, payloadFiles) {
   }
   const actualComponents = new Set(
     sbom.packages
-      .filter((item) => isObject(item) && item.SPDXID !== "SPDXRef-Package-owncontext")
+      .filter((item) => isObject(item) && item.SPDXID !== "SPDXRef-Package-ohmycontext")
       .map((item) => `${String(item.name)}@${String(item.versionInfo)}|${String(item.licenseDeclared)}`),
   );
   const expectedComponents = new Set(
@@ -772,7 +772,7 @@ function verifySpdx(sbom, context, components, payloadFiles) {
     );
   }
   const rootPackage = sbom.packages.find(
-    (item) => isObject(item) && item.SPDXID === "SPDXRef-Package-owncontext",
+    (item) => isObject(item) && item.SPDXID === "SPDXRef-Package-ohmycontext",
   );
   if (!rootPackage || rootPackage.licenseDeclared !== context.projectLicense) {
     throw new ComplianceError(

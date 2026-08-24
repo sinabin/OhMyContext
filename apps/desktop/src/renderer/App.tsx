@@ -81,13 +81,13 @@ function codexConnectionStatus(preview: CodexConnectionPreview | undefined): str
 
   switch (preview.status) {
     case "managed":
-      return "Configuration saved by OwnContext";
+      return "Configuration saved by OhMyContext";
     case "managed_stale":
-      return "OwnContext update required for this Codex connection";
+      return "OhMyContext update required for this Codex connection";
     case "absent":
       return "Ready to connect";
     case "unmanaged_conflict":
-      return "Existing OwnContext entry needs manual review";
+      return "Existing OhMyContext entry needs manual review";
     case "malformed_managed_block":
       return "Managed block was edited or is incomplete";
     case "config_too_large":
@@ -106,21 +106,21 @@ function codexMutationNotice(result: CodexConnectionMutation): string {
       ? ` Backup created: ${result.backupFileName}.`
       : "";
     return result.code === "removed"
-      ? `OwnContext was disconnected.${backup}`
+      ? `OhMyContext was disconnected.${backup}`
       : `Codex connection saved.${backup} Restart Codex to load it.`;
   }
 
   const messages: Record<string, string> = {
     server_unavailable: "Build the local MCP server before connecting Codex.",
-    unmanaged_conflict: "OwnContext found an unmanaged entry and refused to overwrite it.",
+    unmanaged_conflict: "OhMyContext found an unmanaged entry and refused to overwrite it.",
     malformed_managed_block: "The managed block is malformed. Restore its backup or review it manually.",
-    config_too_large: "The configuration is larger than OwnContext's safe edit limit.",
-    invalid_encoding: "The configuration must be valid UTF-8 before OwnContext can edit it.",
+    config_too_large: "The configuration is larger than OhMyContext's safe edit limit.",
+    invalid_encoding: "The configuration must be valid UTF-8 before OhMyContext can edit it.",
     read_failed: "The configuration could not be read safely.",
     backup_failed: "No change was made because a backup could not be created.",
     busy: "Another Claude Code configuration change is already in progress.",
     write_failed: "The configuration could not be replaced safely.",
-    concurrent_change: "The Codex file changed during editing, so OwnContext left it untouched.",
+    concurrent_change: "The Codex file changed during editing, so OhMyContext left it untouched.",
     invalid_path: "The generated local launch paths did not pass validation.",
   };
   return messages[result.code] ?? "The connection was not changed.";
@@ -134,17 +134,17 @@ function claudeCodeConnectionStatus(
   switch (preview.status) {
     case "managed":
       return preview.serverReady
-        ? "User-scope configuration saved by OwnContext"
+        ? "User-scope configuration saved by OhMyContext"
         : "Saved configuration points to an unavailable local MCP build";
     case "managed_stale":
-      return "OwnContext update required for this Claude Code connection";
+      return "OhMyContext update required for this Claude Code connection";
     case "absent":
       if (!preview.serverReady) return "Local MCP build is unavailable";
       return preview.cliAvailable
         ? "Ready to register with Claude Code"
         : "Claude Code CLI was not found";
     case "unmanaged_conflict":
-      return "Existing OwnContext entry needs manual review";
+      return "Existing OhMyContext entry needs manual review";
     case "config_too_large":
       return "Claude configuration exceeds the safe edit limit";
     case "invalid_encoding":
@@ -169,7 +169,7 @@ function claudeCodeMutationNotice(result: ClaudeCodeConnectionMutation): string 
   if (result.ok) {
     if (result.code === "unchanged") return "No Claude Code configuration change was needed.";
     return result.code === "removed"
-      ? `OwnContext was removed from Claude Code.${backup}`
+      ? `OhMyContext was removed from Claude Code.${backup}`
       : `Claude Code registration saved.${backup} Restart active Claude Code sessions to load it.`;
   }
 
@@ -178,7 +178,7 @@ function claudeCodeMutationNotice(result: ClaudeCodeConnectionMutation): string 
   }
 
   if (result.restored) {
-    return `Claude Code did not keep the requested change, so OwnContext restored the prior configuration.${backup}`;
+    return `Claude Code did not keep the requested change, so OhMyContext restored the prior configuration.${backup}`;
   }
 
   if (result.changed) {
@@ -188,21 +188,21 @@ function claudeCodeMutationNotice(result: ClaudeCodeConnectionMutation): string 
   const messages: Record<string, string> = {
     server_unavailable: "Build the local MCP server before connecting Claude Code.",
     cli_unavailable: "Install Claude Code and make its CLI available before connecting.",
-    unmanaged_conflict: "OwnContext found an unmanaged entry and refused to overwrite it.",
-    config_too_large: "The Claude configuration is larger than OwnContext's safe edit limit.",
+    unmanaged_conflict: "OhMyContext found an unmanaged entry and refused to overwrite it.",
+    config_too_large: "The Claude configuration is larger than OhMyContext's safe edit limit.",
     invalid_encoding: "The Claude configuration must be valid UTF-8.",
-    invalid_json: "Repair the Claude JSON configuration before OwnContext can edit it.",
-    invalid_structure: "The Claude configuration structure is ambiguous, so OwnContext left it unchanged.",
+    invalid_json: "Repair the Claude JSON configuration before OhMyContext can edit it.",
+    invalid_structure: "The Claude configuration structure is ambiguous, so OhMyContext left it unchanged.",
     read_failed: "The Claude configuration could not be read safely.",
-    invalid_config_target: "Use an absolute CLAUDE_CONFIG_DIR, then restart OwnContext.",
+    invalid_config_target: "Use an absolute CLAUDE_CONFIG_DIR, then restart OhMyContext.",
     backup_failed: "No change was made because a backup could not be created.",
-    concurrent_change: "The Claude configuration changed during setup, so OwnContext stopped.",
+    concurrent_change: "The Claude configuration changed during setup, so OhMyContext stopped.",
     cli_failed: "The Claude Code CLI rejected the registration command.",
     cli_timeout: "The Claude Code CLI did not finish within the safe time limit.",
     cli_output_limit: "The Claude Code CLI exceeded the safe output limit.",
     verification_failed: "Claude Code did not save the exact scoped connection.",
     recovery_required: "Claude Code changed its configuration unexpectedly. Review the backup before retrying.",
-    write_failed: "OwnContext could not replace the Claude configuration safely.",
+    write_failed: "OhMyContext could not replace the Claude configuration safely.",
     invalid_launch: "The generated local launch paths did not pass validation.",
   };
   return messages[result.code] ?? "The Claude Code connection was not changed.";
@@ -258,13 +258,13 @@ export function App() {
   const [codexConnection, setCodexConnection] = useState<CodexConnectionPreview>();
   const [codexConnectionBusy, setCodexConnectionBusy] = useState(false);
   const [codexConnectionNotice, setCodexConnectionNotice] = useState(
-    "OwnContext never returns the rest of your Codex configuration to this screen.",
+    "OhMyContext never returns the rest of your Codex configuration to this screen.",
   );
   const [claudeCodeConnection, setClaudeCodeConnection] =
     useState<ClaudeCodeConnectionPreview>();
   const [claudeCodeConnectionBusy, setClaudeCodeConnectionBusy] = useState(false);
   const [claudeCodeConnectionNotice, setClaudeCodeConnectionNotice] = useState(
-    "OwnContext shows only the proposed OwnContext entry, never the rest of your Claude configuration.",
+    "OhMyContext shows only the proposed OhMyContext entry, never the rest of your Claude configuration.",
   );
 
   async function refreshSources() {
@@ -351,11 +351,11 @@ export function App() {
           setNotice("Wait for the current import or scan to finish.");
           break;
         case "failed":
-          setError("OwnContext could not inspect that folder safely. Check access and try again.");
+          setError("OhMyContext could not inspect that folder safely. Check access and try again.");
           break;
       }
     } catch {
-      setError("OwnContext could not start the folder scan safely. Try again.");
+      setError("OhMyContext could not start the folder scan safely. Try again.");
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -418,12 +418,12 @@ export function App() {
           break;
         case "failed":
           setDirectoryImportPreflight(undefined);
-          setError("OwnContext could not complete that import safely. Scan the folder again.");
+          setError("OhMyContext could not complete that import safely. Scan the folder again.");
           break;
       }
     } catch {
       setDirectoryImportPreflight(undefined);
-      setError("OwnContext could not complete that import safely. Scan the folder again.");
+      setError("OhMyContext could not complete that import safely. Scan the folder again.");
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -447,7 +447,7 @@ export function App() {
         ? "That preview was already used. No additional import was started."
         : "Import preview canceled. Nothing was imported.");
     } catch {
-      setError("OwnContext could not close that preview cleanly. No import was started.");
+      setError("OhMyContext could not close that preview cleanly. No import was started.");
     } finally {
       setDirectoryDialogBusy(false);
       directoryFlowLock.current = false;
@@ -465,7 +465,7 @@ export function App() {
       await window.ownContext.cancelDirectoryImport(preflight.token);
       await runDirectoryPreflight();
     } catch {
-      setError("OwnContext could not switch folders safely. Try again.");
+      setError("OhMyContext could not switch folders safely. Try again.");
     } finally {
       setDirectoryDialogBusy(false);
       directoryFlowLock.current = false;
@@ -484,7 +484,7 @@ export function App() {
     try {
       const response = await window.ownContext.importSampleLibrary();
       if (response.failed) {
-        setError("OwnContext could not import the sample safely. Try again.");
+        setError("OhMyContext could not import the sample safely. Try again.");
       } else if (response.aborted) {
         setNotice("Sample import canceled. The previous complete vault state was preserved.");
       } else if (!response.canceled) {
@@ -495,7 +495,7 @@ export function App() {
         await Promise.all([refreshSources(), refreshReceipts()]);
       }
     } catch {
-      setError("OwnContext could not import the sample safely. Try again.");
+      setError("OhMyContext could not import the sample safely. Try again.");
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -576,12 +576,12 @@ export function App() {
         setSelected(undefined);
         setPurgePreview(undefined);
         setNotice(
-          `Source removed from OwnContext · receipt ${response.receipt.receiptId.slice(0, 12)}…`,
+          `Source removed from OhMyContext · receipt ${response.receipt.receiptId.slice(0, 12)}…`,
         );
         await Promise.all([refreshSources(), refreshReceipts(), refreshRetrievalActivity()]);
       } else if (response.status === "canceled") {
         setPurgePreview(undefined);
-        setNotice("Removal canceled. The source remains in OwnContext.");
+        setNotice("Removal canceled. The source remains in OhMyContext.");
       } else if (response.status === "stale-confirmation") {
         setPurgePreview(undefined);
         setNotice("The source changed after confirmation. Review its current contents and try again.");
@@ -674,7 +674,7 @@ export function App() {
         <div className="brand">
           <span className="brand-mark">OC</span>
           <div>
-            <strong>OwnContext</strong>
+            <strong>OhMyContext</strong>
             <small>Your evidence, your control</small>
           </div>
         </div>
@@ -980,7 +980,7 @@ function LibraryView(props: LibraryViewProps) {
               {onboarding.emptyState === "first-run" ? (
                 <>
                   <span>SAFE FIRST RUN</span>
-                  <h3>Try OwnContext without using your files</h3>
+                  <h3>Try OhMyContext without using your files</h3>
                   <p>
                     Add a small built-in library of fictional English and Korean notes, or choose
                     a folder you are authorized to import. Only UTF-8 Markdown and text files are read.
@@ -1060,7 +1060,7 @@ function LibraryView(props: LibraryViewProps) {
                     disabled={props.activity !== undefined}
                     onClick={() => props.onBeginSourcePurge(source)}
                   >
-                    Remove from OwnContext
+                    Remove from OhMyContext
                   </button>
                 </div>
               ))}
@@ -1121,7 +1121,7 @@ function LibraryView(props: LibraryViewProps) {
               Import “{props.directoryImportPreflight.folderLabel}”?
             </h3>
             <p className="preflight-summary">
-              OwnContext scanned this folder locally. Confirm the exact supported-file scope before
+              OhMyContext scanned this folder locally. Confirm the exact supported-file scope before
               anything is added to your vault.
             </p>
 
@@ -1206,7 +1206,7 @@ function LibraryView(props: LibraryViewProps) {
             ) : null}
             <small className="preflight-expiry">
               This in-memory preview expires after five minutes and can be used only once.
-              OwnContext checks the approved scope again before import and stops if it no longer matches.
+              OhMyContext checks the approved scope again before import and stops if it no longer matches.
             </small>
 
             <div className="preflight-actions">
@@ -1252,7 +1252,7 @@ function LibraryView(props: LibraryViewProps) {
             aria-labelledby="purge-source-title"
           >
             <p className="eyebrow">CONFIRM LOCAL REMOVAL</p>
-            <h3 id="purge-source-title">Remove “{props.purgePreview.name}” from OwnContext?</h3>
+            <h3 id="purge-source-title">Remove “{props.purgePreview.name}” from OhMyContext?</h3>
             <p className="purge-summary">
               This removes the indexed local copy of {props.purgePreview.documentCount} document
               {props.purgePreview.documentCount === 1 ? "" : "s"}, every stored revision, chunks,
@@ -1315,13 +1315,13 @@ interface AccessHistoryViewProps {
 function retrievalClientLabel(clientKind: RetrievalActivityEntry["clientKind"]): string {
   switch (clientKind) {
     case "desktop":
-      return "OwnContext desktop";
+      return "OhMyContext desktop";
     case "codex":
       return "Launch-declared Codex";
     case "claude-code":
       return "Launch-declared Claude Code";
     case "legacy":
-      return "Earlier OwnContext version";
+      return "Earlier OhMyContext version";
   }
 }
 
@@ -1369,7 +1369,7 @@ function AccessHistoryView(props: AccessHistoryViewProps) {
       <div className="history-boundary-grid">
         <article>
           <span className="history-kind local">LOCAL</span>
-          <strong>OwnContext desktop</strong>
+          <strong>OhMyContext desktop</strong>
           <p>Search previews and opened context stay inside this app.</p>
         </article>
         <article>
@@ -1464,7 +1464,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
             <span className={`health ${codexManaged ? "ready" : "incomplete"}`} />
             <strong>{codexConnectionStatus(props.codexPreview)}</strong>
             <p>
-              OwnContext manages one marked block in <code>~/.codex/config.toml</code>.
+              OhMyContext manages one marked block in <code>~/.codex/config.toml</code>.
               Existing settings stay private and are preserved byte-for-byte.
             </p>
           </div>
@@ -1491,10 +1491,10 @@ function ConnectionsView(props: ConnectionsViewProps) {
         <div className="connection-warning">
           <strong>Before connecting</strong>
           <p>
-            Installing OwnContext does not connect Codex. Updates refresh the connection only
+            Installing OhMyContext does not connect Codex. Updates refresh the connection only
             while this marked block is already managed. A timestamped backup is created before an
             existing file changes. Restart Codex after applying a connection change or updating
-            OwnContext; an older running MCP process fails closed if the vault schema changed. The
+            OhMyContext; an older running MCP process fails closed if the vault schema changed. The
             AI client or provider may receive returned excerpts and provenance metadata, including
             titles, source paths, timestamps, and stable document IDs.
           </p>
@@ -1515,7 +1515,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.codexBusy || !props.codexPreview?.canRemove}
             onClick={props.onRemoveCodex}
           >
-            Disconnect OwnContext
+            Disconnect OhMyContext
           </button>
         </div>
         <p className="connection-notice" aria-live="polite">{props.codexNotice}</p>
@@ -1528,7 +1528,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
             <span className={`health ${claudeCodeManaged ? "ready" : "incomplete"}`} />
             <strong>{claudeCodeConnectionStatus(props.claudeCodePreview)}</strong>
             <p>
-              OwnContext asks the installed Claude Code CLI to manage the user-scoped
+              OhMyContext asks the installed Claude Code CLI to manage the user-scoped
               <code> owncontext</code> entry. It respects <code>CLAUDE_CONFIG_DIR</code> without
               showing that private path or unrelated Claude settings on this screen.
             </p>
@@ -1548,7 +1548,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
         <div className="config-preview">
           <div>
             <p className="eyebrow">CHANGE PREVIEW</p>
-            <p>OwnContext's generated JSON structure is shown with private local paths redacted. Registration uses separated CLI arguments, never a shell command string.</p>
+            <p>OhMyContext's generated JSON structure is shown with private local paths redacted. Registration uses separated CLI arguments, never a shell command string.</p>
           </div>
           <pre>{props.claudeCodePreview?.snippet || "A safe preview is unavailable until Claude Code is found or the conflict is resolved."}</pre>
         </div>
@@ -1558,7 +1558,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
           <p>
             Clicking connect runs Claude Code's user-scope MCP command after creating a backup
             when a configuration already exists. Restart active Claude Code sessions after a
-            connection change or an OwnContext app update; an older running MCP process fails
+            connection change or an OhMyContext app update; an older running MCP process fails
             closed if the vault schema changed. The AI client or provider may receive returned
             excerpts and provenance metadata, including titles, source paths, timestamps, and
             stable document IDs.
@@ -1584,7 +1584,7 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.claudeCodeBusy || !props.claudeCodePreview?.canRemove}
             onClick={props.onRemoveClaudeCode}
           >
-            Disconnect OwnContext
+            Disconnect OhMyContext
           </button>
         </div>
         <p className="connection-notice" aria-live="polite">{props.claudeCodeNotice}</p>

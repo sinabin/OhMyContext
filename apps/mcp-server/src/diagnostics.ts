@@ -26,5 +26,5 @@ export function formatFailureDiagnostic(
   component: string,
   error: unknown,
 ): string {
-  return `[owncontext-mcp] ${component} failed (${safeErrorCategory(error)}).\n`;
+  return `[ohmycontext-mcp] ${component} failed (${safeErrorCategory(error)}).\n`;
 }

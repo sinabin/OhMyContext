@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 export const OWNCONTEXT_SAMPLE_LIBRARY_VERSION = 1 as const;
 export const OWNCONTEXT_SAMPLE_LIBRARY_SOURCE_LABEL =
-  "OwnContext Sample Library" as const;
+  "OhMyContext Sample Library" as const;
 export const OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION = "default" as const;
 export const OWNCONTEXT_SAMPLE_LIBRARY_SUGGESTED_QUERY =
   "weekly review" as const;
@@ -24,7 +24,7 @@ export const OWNCONTEXT_SAMPLE_LIBRARY_FILES = Object.freeze([
   Object.freeze({
     name: "getting-started.md",
     content: [
-      "# Welcome to OwnContext",
+      "# Welcome to OhMyContext",
       "",
       "This built-in library contains fictional, non-sensitive notes. It is safe to use while learning how local import, search, and source-aware retrieval work.",
       "",
@@ -45,7 +45,7 @@ export const OWNCONTEXT_SAMPLE_LIBRARY_FILES = Object.freeze([
     content: [
       "# A multilingual note",
       "",
-      "OwnContext preserves Unicode so one library can contain writing in more than one language.",
+      "OhMyContext preserves Unicode so one library can contain writing in more than one language.",
       "",
       "한국어 예시: 금요일마다 주간 회고를 작성하고, 배운 점과 다음 행동을 짧게 기록합니다.",
       "",

@@ -74,7 +74,7 @@ await build({
 
 const mcpBytes = await readFile(mcpOutput);
 const manifest = {
-  artifact: "OwnContext MCP runtime",
+  artifact: "OhMyContext MCP runtime",
   classification: "unsigned-developer-preview",
   entry: "cli.mjs",
   sha256: createHash("sha256").update(mcpBytes).digest("hex"),

@@ -1531,8 +1531,8 @@ function verifyNugetMetadata(found, coreName, product) {
     nuspecFields.id !== product.squirrelName ||
     nuspecFields.version !== product.version ||
     nuspecFields.title !== product.productName ||
-    nuspecFields.authors !== "OwnContext project contributors" ||
-    nuspecFields.owners !== "OwnContext project contributors" ||
+    nuspecFields.authors !== "OhMyContext project contributors" ||
+    nuspecFields.owners !== "OhMyContext project contributors" ||
     nuspecFields.requireLicenseAcceptance !== "false" ||
     nuspecFields.description !== product.description ||
     !nuspecFields.copyright.includes(currentYear) ||
@@ -1560,7 +1560,7 @@ function verifyNugetMetadata(found, coreName, product) {
   };
   if (
     coreText.charCodeAt(0) !== 0xfeff ||
-    coreFields.creator !== "OwnContext project contributors" ||
+    coreFields.creator !== "OhMyContext project contributors" ||
     coreFields.description !== product.description ||
     coreFields.identifier !== product.squirrelName ||
     coreFields.version !== product.version ||

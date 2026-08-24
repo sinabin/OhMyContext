@@ -1,4 +1,4 @@
-# OwnContext 공개 Windows 배포 런북
+# OhMyContext 공개 Windows 배포 런북
 
 이 문서는 NextH의 신뢰 형성과 유입이라는 제품 목적을 지키면서, 무료 Windows
 EXE를 공개하기 전에 운영자가 확인해야 할 입력과 증적을 한곳에 모은다. 문서의
@@ -27,7 +27,7 @@ EXE라는 가격 정책만으로 소스코드의 사용·수정·재배포 권�
 
 ### 저장소와 프로젝트 메타데이터
 
-1. 공개 GitHub 저장소를 만들고 canonical `origin`을 설정한다.
+1. canonical `origin`은 `https://github.com/sinabin/OhMyContext.git`로 설정한다.
 2. 루트와 모든 `@owncontext/*` workspace의 버전을 하나의 non-placeholder
    semver로 맞춘다.
 3. 라이선스를 결정하고 완전한 `LICENSE` 파일 및 package metadata를 일치시킨다.
@@ -55,6 +55,10 @@ EXE라는 가격 정책만으로 소스코드의 사용·수정·재배포 권�
 `OWNCONTEXT_PUBLIC_RELEASE_APPROVAL=true`는 보호된 job 안에서만 주입한다. 이
 값을 로컬 셸이나 일반 CI job에 넣는 것은 공개 승인이 아니다.
 
+`OWNCONTEXT_*` 환경 변수와 MCP marker 이름은 이미 생성된 Codex·Claude Code
+설정과의 호환성을 위해 유지한 기술적 프로토콜 식별자다. 사용자에게 표시되는
+제품명과 저장소명은 `OhMyContext`를 사용한다.
+
 ## 실행 순서
 
 태그와 workflow dispatch 모두 `v` 접두사를 허용하며 workflow가 이를 제거한다.
@@ -66,7 +70,7 @@ git status --short
 git tag vX.Y.Z
 git push origin main --follow-tags
 
-# 또는 GitHub Actions에서 OwnContext public release를 dispatch하고
+# 또는 GitHub Actions에서 OhMyContext public release를 dispatch하고
 # version에 X.Y.Z를 입력한다.
 ```
 

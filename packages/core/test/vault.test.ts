@@ -375,7 +375,7 @@ describe("vault ingestion and retrieval", () => {
     expect(listSources(vault)).toEqual([
       expect.objectContaining({
         sourceId: sampleSourceId,
-        name: "OwnContext Sample Library",
+        name: "OhMyContext Sample Library",
         documentCount: 2,
       }),
     ]);
@@ -1716,12 +1716,12 @@ describe("vault ingestion and retrieval", () => {
     writer.exec("BEGIN IMMEDIATE");
     try {
       expect(() => searchVault(vault, { query: "no-match" })).toThrow(
-        "No context was returned because OwnContext could not record this access",
+        "No context was returned because OhMyContext could not record this access",
       );
       expect(() => fetchDocument(vault, {
         documentId: imported.documents[0]?.documentId ?? "",
       })).toThrow(
-        "No context was returned because OwnContext could not record this access",
+        "No context was returned because OhMyContext could not record this access",
       );
     } finally {
       writer.exec("ROLLBACK");
@@ -1743,12 +1743,12 @@ describe("vault ingestion and retrieval", () => {
         if (guarded || progress.phase !== "discovering") return;
         guarded = true;
         expect(() => searchVault(vault, { query: "same-process-audit-canary" })).toThrow(
-          "No context was returned because OwnContext could not record this access",
+          "No context was returned because OhMyContext could not record this access",
         );
         expect(() => fetchDocument(vault, {
           documentId: firstImport.documents[0]?.documentId ?? "",
         })).toThrow(
-          "No context was returned because OwnContext could not record this access",
+          "No context was returned because OhMyContext could not record this access",
         );
       },
     });

@@ -463,11 +463,11 @@ describe("OwnContext MCP server", () => {
 
     expect(result.isError).toBe(true);
     expect(text).toBe(
-      "OwnContext search failed. Check the local server diagnostics.",
+      "OhMyContext search failed. Check the local server diagnostics.",
     );
     expect(text).not.toContain("sensitive");
     expect(diagnostics.join("")).toBe(
-      "[owncontext-mcp] search failed (Error).\n",
+      "[ohmycontext-mcp] search failed (Error).\n",
     );
     expect(diagnostics.join("")).not.toContain("sensitive");
   });
@@ -489,11 +489,11 @@ describe("OwnContext MCP server", () => {
     );
     expect(search.isError).toBe(true);
     expect(requireTextContent(search.content[0])).toBe(
-      "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
+      "OhMyContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
     );
     expect(JSON.stringify(search)).not.toContain("sensitive");
     expect(busySearch.diagnostics).toEqual([
-      "[owncontext-mcp] search failed (EOWNCONTEXT_AUDIT_BUSY).\n",
+      "[ohmycontext-mcp] search failed (EOWNCONTEXT_AUDIT_BUSY).\n",
     ]);
 
     const busyFetch = await connectServer({
@@ -518,7 +518,7 @@ describe("OwnContext MCP server", () => {
       "No context was returned because local access history could not be recorded",
     );
     expect(busyFetch.diagnostics).toEqual([
-      "[owncontext-mcp] fetch failed (EOWNCONTEXT_AUDIT_BUSY).\n",
+      "[ohmycontext-mcp] fetch failed (EOWNCONTEXT_AUDIT_BUSY).\n",
     ]);
   });
 
@@ -530,10 +530,10 @@ describe("OwnContext MCP server", () => {
     customError.name = "path:/home/ada/private";
 
     expect(formatFailureDiagnostic("startup", pathError)).toBe(
-      "[owncontext-mcp] startup failed (ENOENT).\n",
+      "[ohmycontext-mcp] startup failed (ENOENT).\n",
     );
     expect(formatFailureDiagnostic("startup", customError)).toBe(
-      "[owncontext-mcp] startup failed (internal_error).\n",
+      "[ohmycontext-mcp] startup failed (internal_error).\n",
     );
   });
 });

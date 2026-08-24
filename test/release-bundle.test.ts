@@ -42,7 +42,7 @@ async function fixture() {
   const evidenceRoot = join(buildRoot, "evidence");
   const complianceRoot = join(
     buildRoot,
-    "OwnContext Developer Preview-win32-x64",
+    "OhMyContext Developer Preview-win32-x64",
     "resources",
     "compliance",
   );
@@ -85,8 +85,8 @@ async function fixture() {
     "# License status\n\nPublic redistribution is blocked.\n",
   );
 
-  const setupName = "OwnContext-Developer-Preview-Unsigned-Setup.exe";
-  const packageName = "OwnContextDeveloperPreview-0.0.0-full.nupkg";
+  const setupName = "OhMyContext-Developer-Preview-Unsigned-Setup.exe";
+  const packageName = "OhMyContextDeveloperPreview-0.0.0-full.nupkg";
   const makerFiles = {
     [setupName]: Buffer.from("unsigned setup fixture"),
     [packageName]: Buffer.from("full package fixture"),
@@ -184,7 +184,7 @@ describe("release candidate bundle", () => {
     });
 
     expect(generated.publicRelease).toBe(false);
-    expect(generated.releaseId).toBe(`owncontext-v0.0.0-windows-x64-${commit.slice(0, 12)}-draft`);
+    expect(generated.releaseId).toBe(`ohmycontext-v0.0.0-windows-x64-${commit.slice(0, 12)}-draft`);
     const manifestText = await readFile(generated.manifestPath, "utf8");
     const manifest = JSON.parse(manifestText);
     expect(manifest.status).toBe("DRAFT — NOT FOR PUBLIC RELEASE");
@@ -216,7 +216,7 @@ describe("release candidate bundle", () => {
     expect(manifest.releaseChecksums.entryCount).toBe(9);
 
     const checksums = await readFile(generated.releaseChecksumsPath, "utf8");
-    expect(checksums).toContain("OwnContext-Developer-Preview-Unsigned-Setup.exe");
+    expect(checksums).toContain("OhMyContext-Developer-Preview-Unsigned-Setup.exe");
     expect(checksums).toContain("evidence/SOURCE-package-lock.json");
     expect(checksums).toContain("evidence/WINDOWS-KEY-STORAGE-SMOKE.json");
     expect(checksums.trim().split("\n")).toHaveLength(9);

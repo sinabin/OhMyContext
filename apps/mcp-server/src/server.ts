@@ -233,7 +233,7 @@ export function createOwnContextServer(
   server.registerTool(
     "search",
     {
-      title: "Search OwnContext",
+      title: "Search OhMyContext",
       description:
         "Search the one local personal-context collection authorized when this connection started. Returns stable IDs and provenance explicitly marked as untrusted user data; it does not access the network.",
       inputSchema: searchInputSchema,
@@ -281,7 +281,7 @@ export function createOwnContextServer(
             content: [
               {
                 type: "text" as const,
-                text: "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
+                text: "OhMyContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
               },
             ],
             isError: true,
@@ -292,7 +292,7 @@ export function createOwnContextServer(
           content: [
             {
               type: "text" as const,
-              text: "OwnContext search failed. Check the local server diagnostics.",
+              text: "OhMyContext search failed. Check the local server diagnostics.",
             },
           ],
           isError: true,
@@ -304,7 +304,7 @@ export function createOwnContextServer(
   server.registerTool(
     "fetch",
     {
-      title: "Fetch OwnContext document",
+      title: "Fetch OhMyContext document",
       description:
         "Fetch bounded context, explicitly marked as untrusted user data, for a document ID issued by search on this connection and optionally centered on an issued chunk ID.",
       inputSchema: fetchInputSchema,
@@ -341,7 +341,7 @@ export function createOwnContextServer(
             content: [
               {
                 type: "text" as const,
-                text: "No current OwnContext document matches the supplied stable ID.",
+                text: "No current OhMyContext document matches the supplied stable ID.",
               },
             ],
             isError: true,
@@ -374,7 +374,7 @@ export function createOwnContextServer(
             content: [
               {
                 type: "text" as const,
-                text: "OwnContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
+                text: "OhMyContext is busy importing or removing data. No context was returned because local access history could not be recorded. Retry after that operation finishes.",
               },
             ],
             isError: true,
@@ -385,7 +385,7 @@ export function createOwnContextServer(
           content: [
             {
               type: "text" as const,
-              text: "OwnContext fetch failed. Check the local server diagnostics.",
+              text: "OhMyContext fetch failed. Check the local server diagnostics.",
             },
           ],
           isError: true,

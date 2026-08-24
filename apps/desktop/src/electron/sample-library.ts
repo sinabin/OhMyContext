@@ -221,7 +221,7 @@ async function verifyExactSampleDirectory(
     actualNames.some((name, index) => name !== expectedNames[index])
   ) {
     throw new Error(
-      "Sample library path already contains content OwnContext does not own.",
+      "Sample library path already contains content OhMyContext does not own.",
     );
   }
 
@@ -236,14 +236,14 @@ async function verifyExactSampleDirectory(
       metadata.size !== expectedBytes.byteLength
     ) {
       throw new Error(
-        "Sample library path already contains content OwnContext does not own.",
+      "Sample library path already contains content OhMyContext does not own.",
       );
     }
 
     const actualBytes = await readFile(filePath);
     if (!actualBytes.equals(expectedBytes)) {
       throw new Error(
-        "Sample library path already contains content OwnContext does not own.",
+      "Sample library path already contains content OhMyContext does not own.",
       );
     }
   }

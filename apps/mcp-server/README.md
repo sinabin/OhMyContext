@@ -1,6 +1,6 @@
-# OwnContext MCP server
+# OhMyContext MCP server
 
-This workspace package exposes one local OwnContext vault to MCP-compatible AI
+This workspace package exposes one local OhMyContext vault to MCP-compatible AI
 clients over `stdio`. It is intentionally read-only and closed-world: the two
 tools can search or fetch data already held by the selected vault, and cannot
 accept filesystem paths, URLs, SQL, sync requests, or deletion requests.
@@ -23,7 +23,7 @@ The executable entry point is `apps/mcp-server/dist/cli.js`. Standard output is
 reserved exclusively for MCP JSON-RPC framing. Startup and tool diagnostics are
 written to standard error.
 
-For a packaged Windows x64 OwnContext launch, the desktop sets
+For a packaged Windows x64 OhMyContext launch, the desktop sets
 `OWNCONTEXT_MCP_BROKER_PIPE` instead of `OWNCONTEXT_VAULT_PATH`. In that mode
 this process forwards MCP frames through the desktop-owned same-user named pipe;
 the MCP child does not open SQLite or receive the vault path. Direct
@@ -37,8 +37,8 @@ process startup:
 
 1. The absolute path in `OWNCONTEXT_VAULT_PATH`, when set.
 2. Otherwise, the OS-local default:
-   - Windows: `%LOCALAPPDATA%\OwnContext\vault.sqlite3`
-   - macOS: `~/Library/Application Support/OwnContext/vault.sqlite3`
+   - Windows: `%LOCALAPPDATA%\OhMyContext\vault.sqlite3`
+   - macOS: `~/Library/Application Support/OhMyContext/vault.sqlite3`
    - Linux and other Unix: `${XDG_DATA_HOME:-~/.local/share}/owncontext/vault.sqlite3`
 
 A relative `OWNCONTEXT_VAULT_PATH` is rejected. The launcher creates the parent
@@ -122,9 +122,9 @@ The desktop app writes the equivalent launch environment automatically.
 
 ### Claude Code
 
-The desktop alpha can connect the generated OwnContext stdio launch as Claude
+The desktop alpha can connect the generated OhMyContext stdio launch as Claude
 Code's user-scoped `owncontext` server. It uses fixed arguments equivalent to
-`claude mcp add-json --scope user owncontext <generated OwnContext JSON>` and
+`claude mcp add-json --scope user owncontext <generated OhMyContext JSON>` and
 respects an absolute `CLAUDE_CONFIG_DIR`. The renderer sees a generated structure
 with private local paths redacted plus bounded status, never unrelated Claude
 configuration.
@@ -165,7 +165,7 @@ does not install a Claude Desktop Extension or manage this configuration:
 
 Restart the client after changing its MCP configuration. Current Claude Desktop
 consumer distribution favors one-click Desktop Extensions (`.dxt`); an
-OwnContext DXT package remains a later, signed-distribution deliverable rather
+OhMyContext DXT package remains a later, signed-distribution deliverable rather
 than a claim of this developer alpha. The placeholder client kind above is not
 accepted by the current server; Claude Desktop support requires an explicit,
 tested identity extension first.

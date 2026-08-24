@@ -26,8 +26,8 @@ const MAKER_EVIDENCE_NAME = "SQUIRREL-MAKER-PROVENANCE.json";
 const KEY_STORAGE_EVIDENCE_NAME = "WINDOWS-KEY-STORAGE-SMOKE.json";
 const PUBLIC_PROFILE_REQUESTED = process.env.OWNCONTEXT_RELEASE_PROFILE === "public";
 const PACKAGED_DIRECTORY_NAME = PUBLIC_PROFILE_REQUESTED
-  ? "OwnContext-win32-x64"
-  : "OwnContext Developer Preview-win32-x64";
+  ? "OhMyContext-win32-x64"
+  : "OhMyContext Developer Preview-win32-x64";
 const MAKER_RELATIVE_DIRECTORY = "make/squirrel.windows/x64";
 const EVIDENCE_RELATIVE_DIRECTORY = "evidence";
 const COMPLIANCE_NAMES = [
@@ -192,9 +192,9 @@ async function renderReleaseBundle(context, signatureInspector, sourceInspector)
   const manifest = {
     schemaVersion: 1,
     status: publicRelease ? "PUBLIC RELEASE" : "DRAFT — NOT FOR PUBLIC RELEASE",
-    product: "OwnContext",
+    product: "OhMyContext",
     release: {
-      releaseId: `owncontext-v${project.version}-windows-x64-${source.commit.slice(0, 12)}${publicRelease ? "" : "-draft"}`,
+      releaseId: `ohmycontext-v${project.version}-windows-x64-${source.commit.slice(0, 12)}${publicRelease ? "" : "-draft"}`,
       version: project.version,
       channel: publicRelease ? "stable" : "developer-alpha",
       platform: "Windows x64",

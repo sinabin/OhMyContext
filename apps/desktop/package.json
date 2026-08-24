@@ -1,10 +1,10 @@
 {
   "name": "@owncontext/desktop",
-  "productName": "OwnContext Developer Preview",
+  "productName": "OhMyContext Developer Preview",
   "version": "0.1.0",
   "private": true,
-  "description": "Unsigned local-first OwnContext developer preview for non-sensitive evaluation data.",
-  "author": "OwnContext project contributors",
+  "description": "Unsigned local-first OhMyContext developer preview for non-sensitive evaluation data.",
+  "author": "OhMyContext project contributors",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {

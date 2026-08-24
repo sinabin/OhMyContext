@@ -1,6 +1,6 @@
 # Contributing
 
-OwnContext is not yet accepting external contributions because its open-source license is undecided. See [LICENSE-STATUS.md](LICENSE-STATUS.md).
+OhMyContext is not yet accepting external contributions because its open-source license is undecided. See [LICENSE-STATUS.md](LICENSE-STATUS.md).
 
 Once the licensing hold is resolved, this document will define the DCO process, development environment, connector review, security requirements, and pull-request checks.
 

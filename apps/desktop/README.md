@@ -1,4 +1,4 @@
-# OwnContext desktop developer alpha
+# OhMyContext desktop developer alpha
 
 This Electron workspace is the first end-user vertical slice. It can:
 
@@ -11,9 +11,9 @@ This Electron workspace is the first end-user vertical slice. It can:
   physical application-data path to the renderer;
 - remove a source through a stale-safe preview, native confirmation, atomic
   lineage purge, and persistent logical deletion receipt;
-- preview, back up, apply, update, and remove one managed OwnContext block in
+- preview, back up, apply, update, and remove one managed OhMyContext block in
   Codex's `~/.codex/config.toml`; and
-- preview, connect, refresh, and disconnect one managed, user-scoped OwnContext
+- preview, connect, refresh, and disconnect one managed, user-scoped OhMyContext
   entry for Claude Code.
 
 ## Run from the repository
@@ -177,15 +177,15 @@ remain a public-release gate even though the enclosing Setup ZIP receives the
 strict raw-structure checks above.
 Squirrel adds
 `lib/net45/squirrel.exe`,
-`lib/net45/OwnContextDeveloperPreview_ExecutionStub.exe`, and package metadata
+`lib/net45/OhMyContextDeveloperPreview_ExecutionStub.exe`, and package metadata
 to the `.nupkg`, while setup/update bootstrap components live outside the
 verified application payload. Complete license, SBOM/notices, and release
 checksum coverage for that maker layer remain public-release gates.
 
 Expected maker outputs include:
 
-- `OwnContext-Developer-Preview-Unsigned-Setup.exe` — per-user Squirrel setup;
-- `OwnContextDeveloperPreview-0.0.0-full.nupkg` — unsigned Squirrel package; and
+- `OhMyContext-Developer-Preview-Unsigned-Setup.exe` — per-user Squirrel setup;
+- `OhMyContextDeveloperPreview-0.0.0-full.nupkg` — unsigned Squirrel package; and
 - `RELEASES` — local Squirrel metadata, not an enabled update channel.
 
 Every package also includes `UNSIGNED-DEVELOPER-PREVIEW.txt`. These artifacts
@@ -211,7 +211,7 @@ fuse must remain enabled for this preview. The packaged smoke test is the
 regression check for this constraint.
 
 Squirrel installation creates the shortcut but does not connect Codex or Claude
-Code. On an update, OwnContext refreshes each recognizable managed Codex or
+Code. On an update, OhMyContext refreshes each recognizable managed Codex or
 Claude Code grant only if it still exists, so a user's opt-out is not recreated.
 Uninstall removes only those recognizable managed grants before removing the
 shortcut. The initial Codex and Claude Code connections remain explicit user
@@ -220,9 +220,9 @@ Lifecycle failures are bounded and still terminate the Squirrel event process.
 
 ## Configuration safety
 
-The renderer receives only the proposed OwnContext TOML structure with private
+The renderer receives only the proposed OhMyContext TOML structure with private
 local paths redacted and a bounded status. It never receives the user's existing Codex configuration. The main
-process refuses unmanaged OwnContext conflicts, malformed markers, non-UTF-8 or
+process refuses unmanaged OhMyContext conflicts, malformed markers, non-UTF-8 or
 oversized files, symbolic links, and concurrent changes. Before replacing an
 existing regular file, it creates an exclusive timestamped backup beside it.
 Disconnect removes only the marked block.
@@ -230,8 +230,8 @@ Disconnect removes only the marked block.
 Claude Code is connected as the user-scoped `owncontext` MCP server. The service
 respects an absolute `CLAUDE_CONFIG_DIR`, uses fixed CLI arguments without a
 shell command string, refuses an unmanaged/conflicting `owncontext` entry, and
-removes only an entry that still matches OwnContext's managed launch shape. The
-renderer receives only the generated OwnContext JSON structure with private
+removes only an entry that still matches OhMyContext's managed launch shape. The
+renderer receives only the generated OhMyContext JSON structure with private
 local paths redacted and bounded status; it
 never receives unrelated Claude configuration. Before any mutation of an
 existing Claude configuration, the complete file is copied byte-for-byte to an
@@ -247,7 +247,7 @@ whitespace and escape spelling. Custom `CLAUDE_CONFIG_DIR` targets are not yet
 persisted across updater/uninstaller environment changes.
 
 After the external Claude CLI exits, times out, or exceeds its output limit,
-OwnContext re-reads the configuration under the same 4 MiB limit. It reports a
+OhMyContext re-reads the configuration under the same 4 MiB limit. It reports a
 successful connection only when the exact managed entry exists, every pre-existing
 top-level value is unchanged, no additional MCP server appeared, and any new
 top-level keys match the six bounded, non-executable bootstrap metadata shapes
@@ -283,7 +283,7 @@ Folder import currently recognizes only valid UTF-8 `.md` and `.txt` files.
 HTML, JSON, CSV, and other formats are reported as excluded and remain planned.
 Re-import adds or revises files that are present, but it does not yet mirror
 deletions from the source folder: a previously indexed document that disappears
-from disk remains until its OwnContext source is removed. Explicit mirror versus
+from disk remains until its OhMyContext source is removed. Explicit mirror versus
 snapshot semantics are a later milestone.
 
 Application-level vault and configuration-backup encryption, safe backup
@@ -326,7 +326,7 @@ usability gate.
 Before that upgrade copies history, excess v1/v2 rows are securely removed in
 restart-safe 1,000-row transactions with a truncating WAL checkpoint between
 batches. A reader that prevents a bounded checkpoint pauses the migration with
-an instruction to close other OwnContext clients and retry; the committed old
+an instruction to close other OhMyContext clients and retry; the committed old
 schema remains valid and the next launch resumes. A 100,000-row regression
 fixture verifies that only the newest 10,000 physical rows survive and that WAL
 peak growth stays bounded. This protects temporary free space but deliberately

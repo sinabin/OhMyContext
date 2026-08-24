@@ -185,7 +185,7 @@ function schemaStillNeedsMigrationUnderLock(
 
 function historyMigrationPausedError(): Error {
   return new Error(
-    "Vault history migration paused because another reader prevented a bounded WAL checkpoint. Close other OwnContext clients and retry.",
+    "Vault history migration paused because another reader prevented a bounded WAL checkpoint. Close other OhMyContext clients and retry.",
   );
 }
 

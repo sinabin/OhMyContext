@@ -50,9 +50,9 @@ export async function resolveSourceBoundPackagedBuild({
   const validatedIdentifier = validateBuildIdentifier(buildIdentifier);
   const publicBuild = validatedIdentifier.startsWith("public-");
   const packagedDirectoryName = publicBuild
-    ? "OwnContext-win32-x64"
-    : "OwnContext Developer Preview-win32-x64";
-  const executableName = publicBuild ? "OwnContext.exe" : "OwnContextDeveloperPreview.exe";
+    ? "OhMyContext-win32-x64"
+    : "OhMyContext Developer Preview-win32-x64";
+  const executableName = publicBuild ? "OhMyContext.exe" : "OhMyContextDeveloperPreview.exe";
   const canonicalOut = await resolveSafeWindowsDirectory(outDirectory);
   if (!canonicalOut) throw new PackagedClientSmokeError("unsafe_out_directory");
 
@@ -127,7 +127,7 @@ export async function resolveSourceBoundPackagedBuild({
     ? "PUBLIC RELEASE"
     : "DRAFT — NOT FOR PUBLIC RELEASE";
   const expectedChannel = expectedPublicRelease ? "stable" : "developer-alpha";
-  const expectedReleaseId = `owncontext-v${version}-windows-x64-${commit?.slice(0, 12)}${expectedPublicRelease ? "" : "-draft"}`;
+  const expectedReleaseId = `ohmycontext-v${version}-windows-x64-${commit?.slice(0, 12)}${expectedPublicRelease ? "" : "-draft"}`;
   if (
     evidence?.schemaVersion !== 1 ||
     evidence?.status !== expectedStatus ||

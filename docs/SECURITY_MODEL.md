@@ -4,7 +4,7 @@ Last updated: 2026-08-24
 
 ## Current status: developer alpha
 
-OwnContext now has a runnable developer alpha. Automated prototype tests cover
+OhMyContext now has a runnable developer alpha. Automated prototype tests cover
 atomic import and cancellation, selected path and symlink boundaries, revision
 and document/source purge behavior, persistent content-free source deletion
 receipts, collection/date filtering, query-text minimization, one launch-time
@@ -64,7 +64,7 @@ Only the last status supports a public security claim.
 
 ## Security objectives
 
-OwnContext must:
+OhMyContext must:
 
 1. keep source content, credentials, queries, and indexes local unless the user performs a disclosed transfer;
 2. prevent one source, collection, AI connection, or vault from reading another without an explicit grant;
@@ -106,7 +106,7 @@ Document titles, file paths, source URLs, contact names, collection names, and a
          optional external AI provider
 ```
 
-The local operating-system account, OwnContext core, connector/parser processes, MCP client, external AI provider, update channel, and future sync service are separate trust boundaries.
+The local operating-system account, OhMyContext core, connector/parser processes, MCP client, external AI provider, update channel, and future sync service are separate trust boundaries.
 
 The built-in sample is a special trusted-source path, not an untrusted renderer
 import. The main process materializes a fixed, byte-verified inventory beneath
@@ -121,7 +121,7 @@ filesystem trust boundary but are separate sensitive assets from the vault. In
 particular, a Claude Code mutation currently creates a byte-for-byte backup of
 the complete Claude configuration file. It can contain unrelated credentials or
 metadata and a new adjacent backup can be created for each mutation. Renderer
-previews expose only generated OwnContext JSON/status, not that file's unrelated
+previews expose only generated OhMyContext JSON/status, not that file's unrelated
 contents; this UI boundary does not mitigate plaintext backup residue. On
 Windows, the alpha has not demonstrated that replacement files and adjacent
 backups preserve or tighten a pre-existing DACL, and its file compare followed
@@ -161,7 +161,7 @@ The design addresses:
 
 ## Explicit non-goals and residual risk
 
-OwnContext cannot promise protection against:
+OhMyContext cannot promise protection against:
 
 - malware or an administrator controlling the OS account while the vault is unlocked;
 - a user intentionally copying, exporting, screenshotting, or disclosing authorized content;
@@ -188,7 +188,7 @@ These limits do not relax least privilege, encryption-at-rest, log minimization,
 - Store or wrap encryption keys with the OS credential store. Never place tokens or keys in SQLite, logs, exports, command-line arguments, or MCP output.
 - Use a reviewed, versioned encryption design and maintained cryptographic libraries; do not invent a cipher or claim that an encrypted filesystem alone provides application-level vault encryption.
 - Locking the vault clears plaintext caches and closes MCP access. Key rotation and interrupted migration require tested recovery behavior.
-- Best-effort deletion on SSDs is not secure erasure. Cryptographic key destruction and whole-device encryption are part of the deletion guidance, while lineage purge prevents content from remaining addressable by OwnContext.
+- Best-effort deletion on SSDs is not secure erasure. Cryptographic key destruction and whole-device encryption are part of the deletion guidance, while lineage purge prevents content from remaining addressable by OhMyContext.
 - Source purge enables both SQLite core `secure_delete` and FTS5 `secure-delete`, removes target-linked retrieval-event rows, and verifies table-count and foreign-key postconditions before storing a receipt. The receipt asserts only logical non-addressability; it does not assert removal from WAL history, storage media, independent backups, or an external AI provider.
 - Receipt re-verification is deliberately narrower than replaying the historical
   deletion: it checks that the target source remains absent and that current
@@ -240,13 +240,13 @@ public-release vault in plaintext.
   multi-target revocation are public-release gates.
 - Protocol stdout contains JSON-RPC only. Diagnostics go to stderr and are content-minimized.
 - Tool metadata declares read-only, closed-world behavior, but annotations are not treated as an enforcement boundary.
-- Each returned item includes provenance and an untrusted-content marker. OwnContext does not concatenate retrieved text into executable instructions.
+- Each returned item includes provenance and an untrusted-content marker. OhMyContext does not concatenate retrieved text into executable instructions.
 - The UI distinguishes fully offline local search from a cloud-AI flow. The
   prototype displays bounded content-free activity attributed to the desktop,
   a Codex/Claude Code launch declaration, or an honest legacy label. The launch
   declaration is not an authenticated client identity. Audit rows and the UI exclude
   excerpt bodies, queries, titles, and paths. Clearing the local history does
-  not retract any response already received or retained outside OwnContext. An
+  not retract any response already received or retained outside OhMyContext. An
   open history screen requires explicit refresh to include new external-client
   activity. If an import or another writer prevents the audit insert, retrieval
   fails closed and returns no context rather than creating an unlogged disclosure.

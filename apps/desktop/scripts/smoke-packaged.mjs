@@ -380,7 +380,7 @@ async function runGuiSmoke(executable, temporaryRoot) {
     result.nonce !== nonce ||
     result.isPackaged !== true ||
     result.sampleSourceReady !== true ||
-    result.sampleSourceLabel !== "OwnContext Sample Library" ||
+    result.sampleSourceLabel !== "OhMyContext Sample Library" ||
     result.suggestedQuery !== "weekly review" ||
     result.sampleProvenanceVerified !== true ||
     result.connectionsScreenReady !== true ||

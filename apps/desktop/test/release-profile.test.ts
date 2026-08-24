@@ -5,7 +5,7 @@ describe("release profile boundary", () => {
   it("defaults to the unsigned developer alpha", () => {
     const profile = resolveReleaseProfile({});
     expect(profile.publicRelease).toBe(false);
-    expect(profile.setupExe).toBe("OwnContext-Developer-Preview-Unsigned-Setup.exe");
+    expect(profile.setupExe).toBe("OhMyContext-Developer-Preview-Unsigned-Setup.exe");
     expect(profile.signing).toBeUndefined();
   });
 

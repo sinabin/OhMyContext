@@ -35,7 +35,7 @@ describe("vault storage provider boundary", () => {
     const callWithoutProvider = openVault as unknown as (path: string) => Vault;
 
     expect(() => callWithoutProvider(databasePath)).toThrow(
-      "An explicit OwnContext vault storage provider is required.",
+      "An explicit OhMyContext vault storage provider is required.",
     );
     expect(existsSync(databaseDirectory)).toBe(false);
     expect(existsSync(databasePath)).toBe(false);

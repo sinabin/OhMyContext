@@ -178,7 +178,7 @@ async function handleMcpBrokerConnection(socket: Socket): Promise<void> {
     await server.connect(transport);
   } catch (error) {
     process.stderr.write(
-      `OwnContext MCP broker rejected a connection: ${error instanceof Error ? error.message : "unknown error"}\n`,
+      `OhMyContext MCP broker rejected a connection: ${error instanceof Error ? error.message : "unknown error"}\n`,
     );
     socket.destroy();
   }
@@ -437,7 +437,7 @@ function createWindow(guiSmoke?: GuiSmokeContext): BrowserWindow {
     minWidth: 900,
     minHeight: 640,
     backgroundColor: "#f4f1ea",
-    title: "OwnContext Developer Preview",
+    title: "OhMyContext",
     webPreferences: {
       preload: join(moduleDirectory, "preload.cjs"),
       contextIsolation: true,
@@ -581,7 +581,7 @@ function startDesktopApp(
       const confirmation = await dialog.showMessageBox(parentWindow, {
         type: "warning",
         title: "Clear local access history?",
-        message: "Clear OwnContext's local access history?",
+        message: "Clear OhMyContext's local access history?",
         detail:
           "This removes only the content-free history stored in this local vault. " +
           "It cannot retract context already returned to an AI client or retained by its provider.",
@@ -623,8 +623,8 @@ function startDesktopApp(
 
       const confirmation = await dialog.showMessageBox(parentWindow, {
         type: "warning",
-        title: "Confirm OwnContext removal",
-        message: `Remove “${prepared.preview.name}” from OwnContext?`,
+        title: "Confirm OhMyContext removal",
+        message: `Remove “${prepared.preview.name}” from OhMyContext?`,
         detail:
           `This removes ${prepared.preview.documentCount} indexed document(s) and their stored lineage. ` +
           "The original folder remains unchanged.",
@@ -726,7 +726,7 @@ function startDesktopApp(
       }
     });
   }).catch((error: unknown) => {
-    console.error("OwnContext failed to initialize the local vault.", error);
+    console.error("OhMyContext failed to initialize the local vault.", error);
     app.exit(1);
   });
 
@@ -753,7 +753,7 @@ function startDesktopApp(
 }
 
 app.setAppUserModelId(
-  "com.squirrel.OwnContextDeveloperPreview.OwnContextDeveloperPreview",
+  "com.squirrel.OhMyContextDeveloperPreview.OhMyContextDeveloperPreview",
 );
 
 async function bootstrap(): Promise<void> {
@@ -771,7 +771,7 @@ async function bootstrap(): Promise<void> {
       ))
       .then(() => app.exit(0))
       .catch(() => {
-        process.stderr.write("OwnContext encrypted-vault verification failed.\n");
+        process.stderr.write("OhMyContext encrypted-vault verification failed.\n");
         app.exit(1);
       });
     return;
@@ -787,7 +787,7 @@ async function bootstrap(): Promise<void> {
       .then(() => runKeyStorageSmoke(keyStorageSmoke, safeStorage, app.isPackaged))
       .then(() => app.exit(0))
       .catch(() => {
-        process.stderr.write("OwnContext key-storage verification failed.\n");
+        process.stderr.write("OhMyContext key-storage verification failed.\n");
         app.exit(1);
       });
     return;
@@ -817,7 +817,7 @@ async function bootstrap(): Promise<void> {
       })
       .catch(() => {
         stopMcpBroker();
-        process.stderr.write("OwnContext MCP broker verification failed.\n");
+        process.stderr.write("OhMyContext MCP broker verification failed.\n");
         app.exit(1);
       });
     return;
@@ -881,6 +881,6 @@ async function bootstrap(): Promise<void> {
 try {
   await bootstrap();
 } catch {
-  process.stderr.write("OwnContext desktop startup failed.\n");
+  process.stderr.write("OhMyContext desktop startup failed.\n");
   app.exit(1);
 }

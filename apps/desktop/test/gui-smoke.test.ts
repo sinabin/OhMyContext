@@ -24,7 +24,7 @@ describe("packaged GUI first-run smoke contract", () => {
     const renderer: GuiSmokeRenderer = {
       executeJavaScript: vi.fn(async (_script: string, _userGesture?: boolean) => ({
         sampleSourceReady: true,
-        sampleSourceLabel: "OwnContext Sample Library",
+        sampleSourceLabel: "OhMyContext Sample Library",
         suggestedQuery: "weekly review",
         sampleProvenanceVerified: true,
         resultCardCount: 1,
@@ -43,7 +43,7 @@ describe("packaged GUI first-run smoke contract", () => {
 
     expect(evidence).toEqual({
       sampleSourceReady: true,
-      sampleSourceLabel: "OwnContext Sample Library",
+        sampleSourceLabel: "OhMyContext Sample Library",
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 1,
@@ -78,7 +78,7 @@ describe("packaged GUI first-run smoke contract", () => {
     {},
     {
       sampleSourceReady: true,
-      sampleSourceLabel: "OwnContext Sample Library",
+        sampleSourceLabel: "OhMyContext Sample Library",
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 0,
@@ -128,7 +128,7 @@ describe("packaged GUI first-run smoke contract", () => {
 
     writeGuiSmokeSuccess(context!, true, {
       sampleSourceReady: true,
-      sampleSourceLabel: "OwnContext Sample Library",
+        sampleSourceLabel: "OhMyContext Sample Library",
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 2,
@@ -147,7 +147,7 @@ describe("packaged GUI first-run smoke contract", () => {
       nonce,
       isPackaged: true,
       sampleSourceReady: true,
-      sampleSourceLabel: "OwnContext Sample Library",
+        sampleSourceLabel: "OhMyContext Sample Library",
       suggestedQuery: "weekly review",
       sampleProvenanceVerified: true,
       resultCardCount: 2,

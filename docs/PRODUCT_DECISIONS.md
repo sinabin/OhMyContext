@@ -16,7 +16,7 @@ Last updated: 2026-08-23
 
 ## Product boundary
 
-OwnContext is a personal context layer, not a new general-purpose chat application. It owns ingestion, provenance, local retrieval, access policy, export, and MCP delivery. The user's existing AI client performs generation.
+OhMyContext is a personal context layer, not a new general-purpose chat application. It owns ingestion, provenance, local retrieval, access policy, export, and MCP delivery. The user's existing AI client performs generation.
 
 ## MVP assumptions
 

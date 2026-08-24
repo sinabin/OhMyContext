@@ -1,6 +1,8 @@
-# OwnContext
+# OhMyContext
 
-OwnContext is a local-first personal context vault that turns user-controlled files and exports into cited, read-only context for MCP-compatible AI clients.
+OhMyContext is a local-first personal context vault that turns user-controlled files and exports into cited, read-only context for MCP-compatible AI clients.
+
+Canonical repository: https://github.com/sinabin/OhMyContext
 
 The developer alpha now previews an eligible local-folder inventory before it
 atomically imports UTF-8 text and Markdown files, stores provenance in a local
@@ -141,12 +143,12 @@ boundary.
 Schema-v3 upgrade also bounds legacy history before copying it: excess v1/v2
 rows are securely pruned in restart-safe 1,000-row batches with truncating WAL
 checkpoints. If another reader pins the WAL, the upgrade pauses safely and can
-resume after other OwnContext clients close. The bound is regression-tested at
+resume after other OhMyContext clients close. The bound is regression-tested at
 100,000 rows; it limits temporary WAL growth but does not shrink the existing
 main database file.
 
 Claude Code connection is user-scoped and respects an absolute
-`CLAUDE_CONFIG_DIR`. OwnContext previews only a path-redacted generated MCP
+`CLAUDE_CONFIG_DIR`. OhMyContext previews only a path-redacted generated MCP
 structure and status,
 not unrelated Claude settings. Before a mutation, however, the current alpha
 backs up the complete Claude configuration file beside the original. Those

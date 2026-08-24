@@ -93,7 +93,7 @@ describe("release compliance artifact evidence", () => {
     };
     expect(sbom.spdxVersion).toBe("SPDX-2.3");
     expect(sbom.packages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "owncontext", licenseDeclared: "NOASSERTION" }),
+      expect.objectContaining({ name: "ohmycontext", licenseDeclared: "NOASSERTION" }),
       expect.objectContaining({ name: "electron", licenseDeclared: "MIT" }),
       expect.objectContaining({
         name: "electron-bundled-chromium-components",

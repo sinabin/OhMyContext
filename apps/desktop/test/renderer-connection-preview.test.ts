@@ -20,7 +20,7 @@ describe("renderer-safe connection previews", () => {
   ])("shows the grant without disclosing private local paths", (preview) => {
     expect(preview).toContain("default");
     expect(preview).toMatch(/OWNCONTEXT_CLIENT_KIND/);
-    expect(preview).toContain("private local OwnContext vault");
+    expect(preview).toContain("private local OhMyContext vault");
     expect(preview).not.toContain("private-user");
     expect(preview).not.toContain(launch.commandPath);
     expect(preview).not.toContain(launch.args[0]);
@@ -44,9 +44,9 @@ describe("renderer-safe connection previews", () => {
     };
     const codex = renderRendererSafeCodexPreview(brokerLaunch);
     const claude = renderRendererSafeClaudeCodePreview(brokerLaunch);
-    expect(codex).toContain("private local OwnContext broker");
+    expect(codex).toContain("private local OhMyContext broker");
     expect(codex).not.toContain("OWNCONTEXT_VAULT_PATH");
-    expect(claude).toContain("private local OwnContext broker");
+    expect(claude).toContain("private local OhMyContext broker");
     expect(claude).not.toContain("OWNCONTEXT_VAULT_PATH");
     expect(codex).not.toContain("private-user");
     expect(claude).not.toContain("private-user");

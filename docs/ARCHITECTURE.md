@@ -4,7 +4,7 @@ Last updated: 2026-08-23
 
 ## System intent
 
-OwnContext is a local personal-data plane with replaceable AI clients. The core does not generate answers. It imports authorized user data, preserves provenance, retrieves bounded evidence, and releases that evidence through a policy-controlled read-only interface.
+OhMyContext is a local personal-data plane with replaceable AI clients. The core does not generate answers. It imports authorized user data, preserves provenance, retrieves bounded evidence, and releases that evidence through a policy-controlled read-only interface.
 
 ```text
 lawful source
@@ -29,7 +29,7 @@ Claude, Codex, or another authorized client
 1. Source boundary: exports, APIs, websites, and attachments can contain malicious data.
 2. Parser boundary: file decoders and connector code must be resource constrained and unable to grant permissions.
 3. Vault boundary: canonical data, derived indexes, tokens, and audit data have different retention and export rules.
-4. Release boundary: once an excerpt is returned to an external AI client, OwnContext cannot control downstream storage or tool use.
+4. Release boundary: once an excerpt is returned to an external AI client, OhMyContext cannot control downstream storage or tool use.
 5. Update boundary: application and connector updates are executable supply-chain inputs and must be signed before public release.
 
 ## Workspace components

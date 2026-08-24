@@ -45,7 +45,7 @@ class LineBuffer {
     const nextSize = this.buffer.byteLength + chunk.byteLength;
     if (nextSize > MAX_BROKER_BUFFER_BYTES) {
       this.buffer = Buffer.alloc(0);
-      throw new Error("OwnContext MCP broker frame buffer exceeded its limit.");
+      throw new Error("OhMyContext MCP broker frame buffer exceeded its limit.");
     }
     this.buffer = Buffer.concat([this.buffer, chunk]);
   }
@@ -66,7 +66,7 @@ function parseJsonLine(line: string): unknown {
   try {
     return JSON.parse(line) as unknown;
   } catch {
-    throw new Error("OwnContext MCP broker received invalid JSON.");
+    throw new Error("OhMyContext MCP broker received invalid JSON.");
   }
 }
 
@@ -125,14 +125,14 @@ export async function acceptOwnContextBrokerConnection(
       resolve();
     };
     const onError = (error: Error): void => fail(error);
-    const onClose = (): void => fail(new Error("OwnContext MCP broker closed before handshake."));
+    const onClose = (): void => fail(new Error("OhMyContext MCP broker closed before handshake."));
     const onData = (chunk: Buffer): void => {
       try {
         lineBuffer.append(chunk);
         for (const line of lineBuffer.readLines()) {
           const value = parseJsonLine(line);
           if (!hello) {
-            if (!isBrokerHello(value)) throw new Error("OwnContext MCP broker handshake was rejected.");
+            if (!isBrokerHello(value)) throw new Error("OhMyContext MCP broker handshake was rejected.");
             hello = value;
             continue;
           }
@@ -143,7 +143,7 @@ export async function acceptOwnContextBrokerConnection(
           succeed();
         }
       } catch (error) {
-        fail(error instanceof Error ? error : new Error("OwnContext MCP broker handshake failed."));
+        fail(error instanceof Error ? error : new Error("OhMyContext MCP broker handshake failed."));
       }
     };
     socket.on("error", onError);
@@ -152,7 +152,7 @@ export async function acceptOwnContextBrokerConnection(
     socket.resume();
   });
 
-  if (!hello) throw new Error("OwnContext MCP broker handshake was incomplete.");
+  if (!hello) throw new Error("OhMyContext MCP broker handshake was incomplete.");
   await writeLine(socket, {
     kind: "ready",
     protocol: OWNCONTEXT_MCP_BROKER_PROTOCOL,
@@ -175,7 +175,7 @@ export class OwnContextBrokerServerTransport implements Transport {
   ) {}
 
   public async start(): Promise<void> {
-    if (this.started) throw new Error("OwnContext MCP broker transport already started.");
+    if (this.started) throw new Error("OhMyContext MCP broker transport already started.");
     this.started = true;
     this.socket.on("data", this.onData);
     this.socket.once("error", this.onSocketError);
@@ -187,7 +187,7 @@ export class OwnContextBrokerServerTransport implements Transport {
   }
 
   public async send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
-    if (this.closed) throw new Error("OwnContext MCP broker transport is closed.");
+    if (this.closed) throw new Error("OhMyContext MCP broker transport is closed.");
     await writeLine(this.socket, message);
   }
 
@@ -269,7 +269,7 @@ export async function runBrokerStdioServer(
         for (const line of socketBuffer.readLines()) {
           const value = parseJsonLine(line);
           if (!ready) {
-            if (!isBrokerReady(value)) throw new Error("OwnContext MCP broker was not ready.");
+            if (!isBrokerReady(value)) throw new Error("OhMyContext MCP broker was not ready.");
             ready = true;
             for (const message of pending.splice(0)) void writeLine(socket, message);
             continue;

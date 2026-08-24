@@ -67,8 +67,8 @@ const config = {
     prune: false,
     win32metadata: {
       CompanyName: releaseProfile.publicRelease
-        ? "NextH and OwnContext contributors"
-        : "OwnContext project contributors",
+        ? "NextH and OhMyContext contributors"
+        : "OhMyContext project contributors",
       FileDescription: releaseProfile.description,
       InternalName: releaseProfile.executableName,
       OriginalFilename: `${releaseProfile.executableName}.exe`,
@@ -81,7 +81,7 @@ const config = {
       platforms: ["win32"],
       config: {
         name: releaseProfile.squirrelName,
-        authors: "OwnContext project contributors",
+        authors: "OhMyContext project contributors",
         description: releaseProfile.description,
         ...(releaseProfile.publicRelease ? { windowsSign: releaseProfile.signing } : {}),
         nuspecTemplate: squirrelNuspecTemplate,

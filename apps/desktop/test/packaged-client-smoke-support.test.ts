@@ -12,7 +12,7 @@ import {
 } from "../scripts/packaged-client-smoke-support.mjs";
 
 const launch = {
-  commandPath: resolve("packaged", "OwnContextDeveloperPreview.exe"),
+  commandPath: resolve("packaged", "OhMyContextDeveloperPreview.exe"),
   args: [resolve("packaged", "resources", "mcp-server", "cli.mjs")],
   vaultPath: resolve("temporary-profile", "vault.sqlite3"),
   allowedCollection: "client-smoke",
@@ -97,8 +97,8 @@ describe("packaged client smoke output boundaries", () => {
   });
 
   it("parses exact quoted Windows process arguments without prefix matching", () => {
-    const executable = "C:\\Program Files\\OwnContext\\OwnContextDeveloperPreview.exe";
-    const entry = "C:\\Program Files\\OwnContext\\resources\\mcp-server\\cli.mjs";
+    const executable = "C:\\Program Files\\OhMyContext\\OhMyContextDeveloperPreview.exe";
+    const entry = "C:\\Program Files\\OhMyContext\\resources\\mcp-server\\cli.mjs";
     expect(parseWindowsCommandLine(`"${executable}" "${entry}"`)).toEqual([
       executable,
       entry,

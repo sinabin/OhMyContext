@@ -195,7 +195,7 @@ export function validateVaultStorageProvider(
   value: unknown,
 ): VaultStorageProvider {
   if (!isObject(value)) {
-    throw new TypeError("An explicit OwnContext vault storage provider is required.");
+    throw new TypeError("An explicit OhMyContext vault storage provider is required.");
   }
 
   let descriptor: CapturedVaultStorageDescriptor | undefined;
@@ -216,7 +216,7 @@ export function validateVaultStorageProvider(
     typeof inspectSchemaVersion !== "function" ||
     typeof openConnection !== "function"
   ) {
-    throw new TypeError("An explicit OwnContext vault storage provider is required.");
+    throw new TypeError("An explicit OhMyContext vault storage provider is required.");
   }
   if (
     !descriptor ||
