@@ -162,7 +162,10 @@ foreach ($invalidUpdaterArguments in @(
   }
 }
 
-$node = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+$node = (node -p "process.execPath").Trim()
+if ([string]::IsNullOrWhiteSpace($node) -or -not [IO.File]::Exists($node)) {
+  throw "Node executable path could not be resolved from process.execPath."
+}
 $nodeStart = [Diagnostics.ProcessStartInfo]::new()
 $nodeStart.FileName = $node
 $nodeStart.UseShellExecute = $false
