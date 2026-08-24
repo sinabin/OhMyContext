@@ -271,7 +271,7 @@ async function assertPackagedEncryptedBroker(packaged, temporaryRoot) {
       OWNCONTEXT_CLIENT_KIND: "codex",
       OWNCONTEXT_VAULT_PATH: encryptedVaultPath,
     },
-    stderr: "pipe",
+    stderr: "inherit",
   });
   const client = new Client(
     { name: "owncontext-packaged-broker-smoke", version: "1.0.0" },
