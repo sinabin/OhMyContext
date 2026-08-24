@@ -286,7 +286,9 @@ async function assertPackagedEncryptedBroker(packaged, temporaryRoot) {
     }
   } catch (error) {
     if (error instanceof PackagedClientSmokeError) throw error;
-    throw new PackagedClientSmokeError("encrypted_broker_protocol_failed");
+    throw new PackagedClientSmokeError(
+      `encrypted_broker_protocol_failed_${String(error).replace(/[^a-z0-9]+/giu, "_").slice(0, 120)}`,
+    );
   } finally {
     await client.close().catch(() => undefined);
   }
