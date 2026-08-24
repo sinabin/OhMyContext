@@ -20,5 +20,6 @@ release/
 out/
 /output/
 .forge-runtime/
+.ci-temp/
 .DS_Store
 Thumbs.db
