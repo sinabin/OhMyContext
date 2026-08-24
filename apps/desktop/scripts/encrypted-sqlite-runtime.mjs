@@ -9,7 +9,8 @@ import {
   realpath,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 
 export const ENCRYPTED_SQLITE_PACKAGE_NAME =
   "better-sqlite3-multiple-ciphers";
@@ -233,15 +234,27 @@ function localPath(root, relativePath) {
 }
 
 function assertInside(root, candidate, label) {
-  const difference = relative(root, candidate);
+  const canonicalRoot = canonicalComparablePath(root);
+  const canonicalCandidate = canonicalComparablePath(candidate);
+  const difference = relative(canonicalRoot, canonicalCandidate);
   if (
     difference.length === 0 ||
     difference === ".." ||
     difference.startsWith("../") ||
-    difference.startsWith("..\\") ||
-    resolve(root, difference) !== resolve(candidate)
+    difference.startsWith("..\\")
   ) {
     throw new Error(`${label} escapes its runtime root.`);
+  }
+}
+
+function canonicalComparablePath(value) {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) throw error;
+    const parent = dirname(normalized);
+    return join(canonicalComparablePath(parent), basename(normalized));
   }
 }
 
