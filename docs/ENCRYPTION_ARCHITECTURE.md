@@ -2,14 +2,15 @@
 
 Last updated: 2026-08-24
 
-Status: **Isolated encrypted-vault candidate verified; normal product vault encryption not implemented**
+Status: **Packaged Windows desktop vault prototype verified; MCP broker and release controls remain open**
 
 This document records the encryption architecture selected for the Windows-first
 OwnContext release. It is an implementation contract and spike plan, not a
-security claim. The current interactive developer preview and MCP route must
-continue to say that their vault is plaintext and suitable only for
-non-sensitive fixtures until every acceptance test in this document passes on
-the packaged application.
+security claim. The packaged Windows x64 desktop route now opens the encrypted
+candidate and reports that boundary in the UI. The standalone MCP route still
+opens its configured path through the plaintext development provider; it must
+not be treated as a sensitive-data path until the broker topology below is
+complete.
 
 macOS support, numeric minimum/recommended hardware specifications, the project
 license, and the final encrypted-SQLite provider are deliberately not decided
@@ -171,10 +172,12 @@ normal product vault:
   vault-directory tampering.
 
 This slice demonstrates that the OS-key API, encrypted provider candidate, and
-key lifecycle can execute together in the packaged Windows main process. It
-does not switch the normal desktop or MCP storage route, encrypt client
-configuration backups, or complete migration/rotation/lock behavior; the UI
-therefore continues to report encryption as not implemented.
+key lifecycle can execute together in the packaged Windows main process and
+that the normal packaged desktop UI can use that candidate. It does not switch
+the standalone MCP process to the broker, encrypt client configuration
+backups, or complete migration/rotation/lock behavior. The MCP connection
+therefore remains outside the sensitive-data claim even though the packaged
+desktop status now reports application encryption.
 
 Primary references:
 
