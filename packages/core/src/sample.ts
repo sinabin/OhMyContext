@@ -121,7 +121,12 @@ function compareNames(left: string, right: string): number {
 
 function samePath(left: string, right: string): boolean {
   return process.platform === "win32"
-    ? resolve(left).toLocaleLowerCase("en-US") ===
-        resolve(right).toLocaleLowerCase("en-US")
+    ? normalizeWindowsPath(left) === normalizeWindowsPath(right)
     : resolve(left) === resolve(right);
+}
+
+function normalizeWindowsPath(value: string): string {
+  return resolve(value)
+    .replace(/^\\\\\\?\\/u, "")
+    .toLocaleLowerCase("en-US");
 }

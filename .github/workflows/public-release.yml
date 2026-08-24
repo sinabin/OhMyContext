@@ -54,10 +54,6 @@ jobs:
             Pop-Location
           }
 
-      - name: Prepare a regular source-test temporary directory
-        shell: pwsh
-        run: New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE '.ci-temp') -Force | Out-Null
-
       - name: Normalize the release version
         shell: pwsh
         env:
@@ -101,9 +97,6 @@ jobs:
           "OWNCONTEXT_SECURITY_ATTESTATION_FILE=$attestationPath" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run source and protocol verification
-        env:
-          TEMP: ${{ github.workspace }}\.ci-temp
-          TMP: ${{ github.workspace }}\.ci-temp
         run: npm run check
 
       - name: Build the signed Windows x64 candidate

@@ -81,14 +81,7 @@ jobs:
             Pop-Location
           }
 
-      - name: Prepare a regular source-test temporary directory
-        shell: pwsh
-        run: New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE '.ci-temp') -Force | Out-Null
-
       - name: Run source and protocol verification
-        env:
-          TEMP: ${{ github.workspace }}\.ci-temp
-          TMP: ${{ github.workspace }}\.ci-temp
         run: npm run check
 
       - name: Build and verify the unsigned Windows alpha
