@@ -82,7 +82,6 @@ import {
 } from "./renderer-connection-preview.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-const OWNCONTEXT_MCP_BRIDGE_ARGUMENT = "--owncontext-mcp-bridge";
 let vault: Vault | undefined;
 let activeImport: AbortController | undefined;
 let folderSelectionActive = false;
@@ -161,36 +160,14 @@ function mcpEntryPath(): string {
     : join(app.getAppPath(), "..", "mcp-server", "dist", "cli.js");
 }
 
-function mcpBridgeEntryPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, "mcp-server", "bridge.mjs")
-    : join(app.getAppPath(), "..", "mcp-server", "dist", "bridge.js");
-}
-
 function ownContextMcpLaunch(): OwnContextMcpLaunch & ClaudeCodeMcpLaunch {
   return {
     commandPath: process.execPath,
-    args: [OWNCONTEXT_MCP_BRIDGE_ARGUMENT],
+    args: [mcpEntryPath()],
     vaultPath: databasePath(),
     allowedCollection: "default",
-    runtime: "electron-broker",
+    runtime: "electron",
   };
-}
-
-async function runMcpBridge(): Promise<void> {
-  await app.whenReady();
-  await initializeVault(process.resourcesPath);
-  const bridge = await import(pathToFileURL(mcpBridgeEntryPath()).href) as {
-    runStdioServerWithApi: (
-      vault: Vault,
-      api: { fetchDocument: typeof fetchDocument; searchVault: typeof searchVault },
-    ) => Promise<void>;
-  };
-  try {
-    await bridge.runStdioServerWithApi(requireVault(), { fetchDocument, searchVault });
-  } finally {
-    closeVault();
-  }
 }
 
 function isAbortFailure(error: unknown, signal: AbortSignal): boolean {
@@ -739,16 +716,6 @@ async function bootstrap(): Promise<void> {
       .then(() => app.exit(0))
       .catch(() => {
         process.stderr.write("OwnContext key-storage verification failed.\n");
-        app.exit(1);
-      });
-    return;
-  }
-
-  if (process.argv.includes(OWNCONTEXT_MCP_BRIDGE_ARGUMENT)) {
-    void runMcpBridge()
-      .then(() => app.exit(0))
-      .catch((error: unknown) => {
-        process.stderr.write(`OwnContext MCP bridge failed: ${String(error)}\n`);
         app.exit(1);
       });
     return;

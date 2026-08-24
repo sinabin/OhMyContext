@@ -58,13 +58,13 @@ type JsonObject = { [key: string]: JsonValue };
 export interface ClaudeCodeMcpLaunch {
   /** Absolute Node.js or Electron executable path. */
   commandPath: string;
-  /** Absolute paths, or the fixed packaged broker switch. */
+  /** Absolute paths only, normally the bundled MCP entry point. */
   args: readonly string[];
   /** Absolute path to the private OwnContext SQLite vault. */
   vaultPath: string;
   /** Single collection this Claude Code connection may search. */
   allowedCollection: string;
-  runtime: "node" | "electron" | "electron-broker";
+  runtime: "node" | "electron";
 }
 
 export interface ClaudeCodeMcpConfig extends JsonObject {
@@ -960,23 +960,17 @@ function isSafeWindowsDrivePath(value: unknown): value is string {
 function validateLaunch(launch: ClaudeCodeMcpLaunch): void {
   if (
     !launch ||
-    (launch.runtime !== "node" &&
-      launch.runtime !== "electron" &&
-      launch.runtime !== "electron-broker") ||
+    (launch.runtime !== "node" && launch.runtime !== "electron") ||
     !isSafeAbsolutePath(launch.commandPath) ||
     !isSafeAbsolutePath(launch.vaultPath) ||
     !isSafeCollection(launch.allowedCollection) ||
     !Array.isArray(launch.args) ||
     launch.args.length === 0 ||
     launch.args.length > 8 ||
-    launch.args.some((argument) => !isSafeLaunchArgument(argument))
+    launch.args.some((argument) => !isSafeAbsolutePath(argument))
   ) {
     throw new InternalClaudeCodePathError("Invalid OwnContext MCP launch.");
   }
-}
-
-function isSafeLaunchArgument(value: unknown): value is string {
-  return isSafeAbsolutePath(value) || value === "--owncontext-mcp-bridge";
 }
 
 function isSafeCollection(value: unknown): value is string {

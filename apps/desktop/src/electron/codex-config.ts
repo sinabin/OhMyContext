@@ -52,13 +52,13 @@ export type CodexConfigResultCode =
 export interface OwnContextMcpLaunch {
   /** Absolute Node.js or Electron executable path. */
   commandPath: string;
-  /** Absolute paths, or the fixed packaged broker switch. */
+  /** Every argument is an absolute filesystem path, normally the MCP entry file. */
   args: readonly string[];
   /** Absolute path to the private OwnContext SQLite vault. */
   vaultPath: string;
   /** Single collection this AI-client connection may search. */
   allowedCollection: string;
-  runtime: "node" | "electron" | "electron-broker";
+  runtime: "node" | "electron";
 }
 
 export interface CodexConfigPreview {
@@ -320,23 +320,17 @@ function safeSnippet(launch: OwnContextMcpLaunch): string | undefined {
 
 function validateLaunch(launch: OwnContextMcpLaunch): void {
   if (
-    (launch.runtime !== "node" &&
-      launch.runtime !== "electron" &&
-      launch.runtime !== "electron-broker") ||
+    (launch.runtime !== "node" && launch.runtime !== "electron") ||
     !isSafeAbsolutePath(launch.commandPath) ||
     !isSafeAbsolutePath(launch.vaultPath) ||
     !isSafeCollection(launch.allowedCollection) ||
     !Array.isArray(launch.args) ||
     launch.args.length === 0 ||
     launch.args.length > 8 ||
-    launch.args.some((argument) => !isSafeLaunchArgument(argument))
+    launch.args.some((argument) => !isSafeAbsolutePath(argument))
   ) {
     throw new InternalPathError();
   }
-}
-
-function isSafeLaunchArgument(value: unknown): value is string {
-  return isSafeAbsolutePath(value) || value === "--owncontext-mcp-bridge";
 }
 
 function isSafeCollection(value: unknown): value is string {

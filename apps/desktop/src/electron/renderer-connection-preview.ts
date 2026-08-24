@@ -1,6 +1,6 @@
 interface RendererSafeLaunch {
   allowedCollection: string;
-  runtime: "node" | "electron" | "electron-broker";
+  runtime: "node" | "electron";
 }
 
 const EXECUTABLE_PLACEHOLDER = "<private local OwnContext executable>";
