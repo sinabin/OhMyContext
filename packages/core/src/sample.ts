@@ -83,7 +83,9 @@ export async function verifyOwnContextSampleLibraryDirectory(
   }
   const canonical = await realpath(requested);
   if (!samePath(requested, canonical)) {
-    throw new Error("Built-in sample directory must not traverse a link.");
+    throw new Error(
+      `Built-in sample directory must not traverse a link: requested=${requested} canonical=${canonical}`,
+    );
   }
 
   const entries = await readdir(canonical, { withFileTypes: true });
