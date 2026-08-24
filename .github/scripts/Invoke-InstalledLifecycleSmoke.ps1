@@ -301,7 +301,7 @@ function Get-ProductShortcuts {
     foreach ($root in Get-ShortcutRoots) {
       if (-not (Test-Path -LiteralPath $root.Path -PathType Container)) { continue }
       $links = @(Get-ChildItem -LiteralPath $root.Path -Filter "*.lnk" -File -Recurse -Force)
-      if ($links.Count -gt 5000) {
+      if (@($links).Count -gt 5000) {
         Throw-BoundaryFailure "shortcut inventory exceeded its bound."
       }
       foreach ($link in $links) {
@@ -340,7 +340,7 @@ function Assert-ShortcutTargets {
   )
   foreach ($kind in @("desktop", "start-menu")) {
     $matching = @($Shortcuts | Where-Object { $_.Kind -eq $kind })
-    if ($matching.Count -ne 1) {
+    if (@($matching).Count -ne 1) {
       throw "Expected exactly one $kind shortcut."
     }
     $shortcut = $matching[0]
@@ -492,7 +492,7 @@ function Assert-IsolatedConfigsRemoved {
 function Assert-InstalledPayloadChecksums {
   param([string]$ApplicationRoot, [string]$ChecksumText)
   $lines = @($ChecksumText -split "\r?\n" | Where-Object { $_.Length -gt 0 })
-  if ($lines.Count -lt 1 -or $lines.Count -gt 20000) {
+  if (@($lines).Count -lt 1 -or @($lines).Count -gt 20000) {
     throw "Installed payload checksum inventory is outside its bound."
   }
   $seen = [Collections.Generic.HashSet[string]]::new(
@@ -510,7 +510,7 @@ function Assert-InstalledPayloadChecksums {
       $relativePath.Contains("\") -or
       $relativePath.Contains(":") -or
       $relativePath.Contains([char]0) -or
-      $segments.Count -lt 1 -or
+      @($segments).Count -lt 1 -or
       @($segments | Where-Object { $_ -eq "" -or $_ -eq "." -or $_ -eq ".." }).Count -ne 0
     ) {
       throw "Installed payload checksum path is unsafe."
@@ -523,8 +523,8 @@ function Assert-InstalledPayloadChecksums {
       throw "Installed payload checksum path escaped the application root."
     }
     $currentDirectory = $ApplicationRoot
-    foreach ($segment in $segments[0..([Math]::Max(0, $segments.Count - 2))]) {
-      if ($segments.Count -eq 1) { break }
+    foreach ($segment in $segments[0..([Math]::Max(0, @($segments).Count - 2))]) {
+      if (@($segments).Count -eq 1) { break }
       $currentDirectory = Assert-RegularDirectory (
         Join-Path $currentDirectory $segment
       ) "checksummed installed payload parent"
@@ -618,7 +618,7 @@ if ($releaseVersion -notmatch "^[0-9]+[.][0-9]+[.][0-9]+$") {
   Throw-BoundaryFailure "release version is not a simple Squirrel version."
 }
 $setupArtifacts = @($manifest.artifacts | Where-Object { $_.role -eq "windows-setup" })
-if ($setupArtifacts.Count -ne 1) {
+if (@($setupArtifacts).Count -ne 1) {
   Throw-BoundaryFailure "release manifest must name one setup artifact."
 }
 $setupArtifact = $setupArtifacts[0]
@@ -657,11 +657,11 @@ $checksumMatches = @([Regex]::Matches(
   $checksums,
   "(?m)^([0-9a-f]{64})  $escapedRelativeSetup$"
 ))
-if ($checksumMatches.Count -ne 1 -or $checksumMatches[0].Groups[1].Value -ne $setupHash) {
+if (@($checksumMatches).Count -ne 1 -or $checksumMatches[0].Groups[1].Value -ne $setupHash) {
   Throw-BoundaryFailure "release checksum index does not bind the exact Setup bytes."
 }
 $checksumLines = @($checksums -split "\r?\n" | Where-Object { $_.Length -gt 0 })
-if ($checksumLines.Count -ne [int]$manifest.releaseChecksums.entryCount) {
+if (@($checksumLines).Count -ne [int]$manifest.releaseChecksums.entryCount) {
   Throw-BoundaryFailure "release checksum index entry count changed."
 }
 
@@ -673,13 +673,13 @@ if (-not (Test-StrictDescendant $localAppData $installRoot)) {
 if (Test-Path -LiteralPath $installRoot) {
   throw "A prior OwnContext installation tree exists on the runner."
 }
-if ((Get-ProductProcesses).Count -ne 0) {
+if (@(Get-ProductProcesses).Count -ne 0) {
   throw "A prior OwnContext process exists on the runner."
 }
-if ((Get-OwnContextArpRecords).Count -ne 0) {
+if (@(Get-OwnContextArpRecords).Count -ne 0) {
   throw "A prior OwnContext uninstall registration exists on the runner."
 }
-if ((Get-ProductShortcuts).Count -ne 0) {
+if (@(Get-ProductShortcuts).Count -ne 0) {
   throw "A prior OwnContext shortcut exists on the runner."
 }
 
@@ -748,7 +748,7 @@ try {
 
   Wait-Until -TimeoutMilliseconds 30000 -FailureMessage "Silent Setup did not settle." -Condition {
     (Test-Path -LiteralPath $installRoot -PathType Container) -and
-    (Get-ProductProcesses).Count -eq 0
+    @(Get-ProductProcesses).Count -eq 0
   }
   $installedRoot = Assert-RegularDirectory $installRoot "installed Squirrel root"
   $updateExecutable = Assert-RegularFile (Join-Path $installedRoot "Update.exe") "installed Update.exe"
@@ -757,7 +757,7 @@ try {
   ) "installed Squirrel application execution stub"
   $applicationDirectories = @(Get-ChildItem -LiteralPath $installedRoot -Directory -Filter "app-*" -Force)
   if (
-    $applicationDirectories.Count -ne 1 -or
+    @($applicationDirectories).Count -ne 1 -or
     $applicationDirectories[0].Name -ne "app-$releaseVersion" -or
     (($applicationDirectories[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
   ) {
@@ -801,11 +801,11 @@ try {
   }
 
   Wait-Until -TimeoutMilliseconds 15000 -FailureMessage "Squirrel registration or shortcuts did not appear." -Condition {
-    (Get-OwnContextArpRecords).Count -eq 1 -and
-    (Get-ProductShortcuts).Count -eq 2
+    @(Get-OwnContextArpRecords).Count -eq 1 -and
+    @(Get-ProductShortcuts).Count -eq 2
   }
   $arpRecords = Get-OwnContextArpRecords
-  if ($arpRecords.Count -ne 1) { throw "Expected one OwnContext uninstall registration." }
+  if (@($arpRecords).Count -ne 1) { throw "Expected one OwnContext uninstall registration." }
   $arp = $arpRecords[0]
   if (
     $arp.KeyName -ne $ProductPackageId -or
@@ -887,7 +887,7 @@ try {
   $forcedProcess.Dispose()
   $forcedProcess = $null
   Wait-Until -TimeoutMilliseconds 15000 -FailureMessage "Forced-termination process cleanup did not settle." -Condition {
-    (Get-ProductProcesses).Count -eq 0
+    @(Get-ProductProcesses).Count -eq 0
   }
   $forcedTerminationCompleted = $true
 
@@ -989,9 +989,9 @@ try {
 
   Wait-Until -TimeoutMilliseconds 60000 -FailureMessage "Squirrel uninstall did not remove every installed-state surface." -Condition {
     -not (Test-Path -LiteralPath $installRoot) -and
-    (Get-ProductProcesses).Count -eq 0 -and
-    (Get-OwnContextArpRecords).Count -eq 0 -and
-    (Get-ProductShortcuts).Count -eq 0
+    @(Get-ProductProcesses).Count -eq 0 -and
+    @(Get-OwnContextArpRecords).Count -eq 0 -and
+    @(Get-ProductShortcuts).Count -eq 0
   }
   $explicitUninstallCompleted = $true
   Assert-IsolatedConfigsRemoved $configFixture
