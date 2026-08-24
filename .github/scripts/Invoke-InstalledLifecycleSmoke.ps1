@@ -177,6 +177,50 @@ function Wait-Until {
   throw $FailureMessage
 }
 
+function Start-UnobservedProcess {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory,
+    [hashtable]$EnvironmentOverrides = @{},
+    [string[]]$RemoveEnvironment = @()
+  )
+
+  $executable = Assert-RegularFile $FilePath "child executable"
+  $workingRoot = Assert-RegularDirectory $WorkingDirectory "child working directory"
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $executable
+  $startInfo.WorkingDirectory = $workingRoot
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  foreach ($argument in $ArgumentList) {
+    if ($null -eq $argument -or $argument.Contains([char]0)) {
+      Throw-BoundaryFailure "child argument is invalid."
+    }
+    [void]$startInfo.ArgumentList.Add($argument)
+  }
+  foreach ($name in $RemoveEnvironment) {
+    [void]$startInfo.Environment.Remove($name)
+  }
+  foreach ($entry in $EnvironmentOverrides.GetEnumerator()) {
+    if (
+      [string]::IsNullOrWhiteSpace([string]$entry.Key) -or
+      $null -eq $entry.Value -or
+      ([string]$entry.Value).Contains([char]0)
+    ) {
+      Throw-BoundaryFailure "child environment override is invalid."
+    }
+    $startInfo.Environment[[string]$entry.Key] = [string]$entry.Value
+  }
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) {
+    $process.Dispose()
+    throw "Child process did not start."
+  }
+  return $process
+}
+
 function Get-ProductProcesses {
   return @(Get-Process -Name $ProductProcessName -ErrorAction SilentlyContinue)
 }
@@ -673,6 +717,9 @@ $rootApplicationExecutable = $null
 $updateExecutable = $null
 $configFixture = $null
 $explicitUninstallCompleted = $false
+$forcedTerminationCompleted = $false
+$cleanProfileRelaunchCompleted = $false
+$forcedProcess = $null
 
 try {
   [void](Invoke-BoundedProcess `
@@ -795,6 +842,63 @@ try {
     throw "Installed GUI first-run smoke evidence is invalid."
   }
 
+  # Force-terminate a packaged first-run journey before it can publish its
+  # renderer evidence, then prove a fresh profile can start and complete.
+  $forcedRoot = Join-Path $temporaryRoot "forced-gui"
+  $relaunchRoot = Join-Path $temporaryRoot "relaunch-gui"
+  [void](New-Item -ItemType Directory -Path $forcedRoot -ErrorAction Stop)
+  [void](New-Item -ItemType Directory -Path $relaunchRoot -ErrorAction Stop)
+  $forcedEnvironment = @{} + $isolatedEnvironment
+  $forcedEnvironment.OWNCONTEXT_GUI_SMOKE_ROOT = $forcedRoot
+  $forcedEnvironment.OWNCONTEXT_GUI_SMOKE_NONCE = [Guid]::NewGuid().ToString()
+  $forcedProcess = Start-UnobservedProcess `
+    -FilePath $installedExecutable `
+    -ArgumentList @("--owncontext-gui-smoke") `
+    -WorkingDirectory $applicationRoot `
+    -EnvironmentOverrides $forcedEnvironment `
+    -RemoveEnvironment @("ELECTRON_RUN_AS_NODE")
+  Start-Sleep -Milliseconds 1500
+  if ($forcedProcess.HasExited) {
+    $forcedProcess.Dispose()
+    $forcedProcess = $null
+    throw "Packaged GUI process exited before forced-termination test."
+  }
+  $forcedProcess.Kill($true)
+  [void]$forcedProcess.WaitForExit(10000)
+  if (-not $forcedProcess.HasExited) {
+    throw "Forced-termination GUI process did not exit within its bound."
+  }
+  $forcedProcess.Dispose()
+  $forcedProcess = $null
+  Wait-Until -TimeoutMilliseconds 15000 -FailureMessage "Forced-termination process cleanup did not settle." -Condition {
+    (Get-ProductProcesses).Count -eq 0
+  }
+  $forcedTerminationCompleted = $true
+
+  $relaunchNonce = [Guid]::NewGuid().ToString()
+  $relaunchEnvironment = @{} + $isolatedEnvironment
+  $relaunchEnvironment.OWNCONTEXT_GUI_SMOKE_ROOT = $relaunchRoot
+  $relaunchEnvironment.OWNCONTEXT_GUI_SMOKE_NONCE = $relaunchNonce
+  [void](Invoke-BoundedProcess `
+    -FilePath $installedExecutable `
+    -ArgumentList @("--owncontext-gui-smoke") `
+    -WorkingDirectory $applicationRoot `
+    -EnvironmentOverrides $relaunchEnvironment `
+    -RemoveEnvironment @("ELECTRON_RUN_AS_NODE") `
+    -TimeoutMilliseconds 45000)
+  $relaunchEvidence = (Read-BoundedUtf8 (Join-Path $relaunchRoot "renderer-ready.json") 16KB) | ConvertFrom-Json -Depth 10
+  if (
+    $relaunchEvidence.status -ne "first-run-sample-search-and-connections-preview-complete" -or
+    $relaunchEvidence.nonce -ne $relaunchNonce -or
+    $relaunchEvidence.isPackaged -ne $true -or
+    [int]$relaunchEvidence.resultCardCount -lt 1 -or
+    $relaunchEvidence.connectionsScreenReady -ne $true -or
+    $relaunchEvidence.accessHistoryScreenReady -ne $true
+  ) {
+    throw "Clean-profile relaunch GUI evidence is invalid."
+  }
+  $cleanProfileRelaunchCompleted = $true
+
   $nodeExecutable = (Get-Command node -CommandType Application -ErrorAction Stop).Source
   $mcpScript = Assert-RegularFile (
     Join-Path $workspace ".github\scripts\installed-mcp-smoke.mjs"
@@ -863,10 +967,10 @@ try {
       "no-node-launch" = $true
       "sample-import-and-search" = $true
       "mcp-search-and-fetch" = $true
-      "forced-termination-recovery" = $true
+      "forced-termination-recovery" = $forcedTerminationCompleted
       "managed-client-cleanup" = $true
       "squirrel-uninstall" = $true
-      "clean-profile-relaunch" = $true
+      "clean-profile-relaunch" = $cleanProfileRelaunchCompleted
     }
     setup = [ordered]@{
       fileName = $SetupFileName
@@ -893,6 +997,8 @@ try {
       allDeclaredInstalledPayloadHashesMatchedVerifiedPackage = $true
       arpAndShortcutTargetsVerified = $true
       isolatedInstalledGuiJourneyCompleted = $true
+      forcedTerminationRecoveryCompleted = $forcedTerminationCompleted
+      cleanProfileRelaunchCompleted = $cleanProfileRelaunchCompleted
       installedPackagedMcpSearchFetchCompleted = $true
       managedClientEntriesRemoved = $true
       unrelatedClientCanariesPreserved = $true
@@ -929,6 +1035,14 @@ catch {
   $primaryFailure = $_
 }
 finally {
+  if ($null -ne $forcedProcess) {
+    try {
+      if (-not $forcedProcess.HasExited) { $forcedProcess.Kill($true) }
+      [void]$forcedProcess.WaitForExit(5000)
+    } catch { }
+    try { $forcedProcess.Dispose() } catch { }
+    $forcedProcess = $null
+  }
   if (-not $explicitUninstallCompleted -and $null -ne $updateExecutable) {
     try {
       [void](Invoke-BoundedProcess `
