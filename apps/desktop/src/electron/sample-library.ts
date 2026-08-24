@@ -10,7 +10,8 @@ import {
   rmdir,
   unlink,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   OWNCONTEXT_SAMPLE_LIBRARY_COLLECTION,
   OWNCONTEXT_SAMPLE_LIBRARY_FILES,
@@ -278,7 +279,10 @@ async function cleanupKnownTemporaryDirectory(
 }
 
 function assertStrictDescendant(parent: string, candidate: string): void {
-  const difference = relative(parent, candidate);
+  const difference = relative(
+    canonicalComparablePath(parent),
+    canonicalParentComparablePath(candidate),
+  );
   if (
     difference.length === 0 ||
     difference === ".." ||
@@ -290,12 +294,30 @@ function assertStrictDescendant(parent: string, candidate: string): void {
 }
 
 function samePath(left: string, right: string): boolean {
-  const normalizedLeft = resolve(left);
-  const normalizedRight = resolve(right);
+  const normalizedLeft = canonicalComparablePath(left);
+  const normalizedRight = canonicalComparablePath(right);
   return process.platform === "win32"
     ? normalizedLeft.toLocaleLowerCase("en-US") ===
         normalizedRight.toLocaleLowerCase("en-US")
     : normalizedLeft === normalizedRight;
+}
+
+function canonicalComparablePath(value: string): string {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+    return join(canonicalComparablePath(dirname(normalized)), basename(normalized));
+  }
+}
+
+function canonicalParentComparablePath(value: string): string {
+  const normalized = resolve(value);
+  return join(
+    canonicalComparablePath(dirname(normalized)),
+    basename(normalized),
+  );
 }
 
 async function pathExists(candidate: string): Promise<boolean> {

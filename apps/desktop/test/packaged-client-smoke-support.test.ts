@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -202,10 +202,11 @@ describe("packaged client smoke output boundaries", () => {
         writeFile(join(nativeRoot, "claude.exe"), "same-binary", "utf8"),
       ]);
 
+      const canonicalPackageRoot = await realpath(packageRoot);
       await expect(discoverClaudeNpmNativeCommand({
         environment: { PATH: npmBin },
       })).resolves.toEqual({
-        commandPath: join(packageRoot, "bin", "claude.exe"),
+        commandPath: join(canonicalPackageRoot, "bin", "claude.exe"),
         prefixArgs: [],
       });
     },
