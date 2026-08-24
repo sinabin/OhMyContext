@@ -2,6 +2,8 @@ import { mkdtemp, lstat, mkdir, readFile, realpath, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
   createNodeSqliteDevelopmentStorageProvider,
   listRetrievalActivity,
@@ -218,6 +220,8 @@ async function main() {
       throw new PackagedClientSmokeError("claude_remove_unverified");
     }
     claudeService = undefined;
+
+    await assertPackagedEncryptedBroker(packaged, temporaryRoot);
   } catch (error) {
     primaryError = error;
   } finally {
@@ -247,6 +251,54 @@ async function main() {
     }
   }
   if (primaryError) throw primaryError;
+}
+
+async function assertPackagedEncryptedBroker(packaged, temporaryRoot) {
+  const userDataPath = join(temporaryRoot, "broker-user-data");
+  const encryptedVaultPath = join(
+    userDataPath,
+    "encrypted-vault",
+    "owncontext.encrypted.sqlite",
+  );
+  const transport = new StdioClientTransport({
+    command: packaged.executable,
+    args: [`--user-data-dir=${userDataPath}`, "--owncontext-mcp-bridge"],
+    env: {
+      ...createIsolatedClientEnvironment(process.env, {
+        homeDirectory: join(temporaryRoot, "broker-home"),
+      }),
+      OWNCONTEXT_ALLOWED_COLLECTION: allowedCollection,
+      OWNCONTEXT_CLIENT_KIND: "codex",
+      OWNCONTEXT_VAULT_PATH: encryptedVaultPath,
+    },
+    stderr: "pipe",
+  });
+  const client = new Client(
+    { name: "owncontext-packaged-broker-smoke", version: "1.0.0" },
+    { capabilities: {} },
+  );
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+    const names = new Set(tools.tools.map((tool) => tool.name));
+    if (!names.has("search") || !names.has("fetch")) {
+      throw new PackagedClientSmokeError("encrypted_broker_tools_missing");
+    }
+  } catch (error) {
+    if (error instanceof PackagedClientSmokeError) throw error;
+    throw new PackagedClientSmokeError("encrypted_broker_protocol_failed");
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+  try {
+    const metadata = await lstat(encryptedVaultPath);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1) {
+      throw new Error("invalid encrypted broker vault");
+    }
+  } catch (error) {
+    if (error instanceof PackagedClientSmokeError) throw error;
+    throw new PackagedClientSmokeError("encrypted_broker_vault_not_created");
+  }
 }
 
 function assertSuccessfulClientCommand(result, client) {

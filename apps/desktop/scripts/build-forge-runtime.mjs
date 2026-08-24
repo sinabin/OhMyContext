@@ -72,12 +72,28 @@ await build({
   target: "node24",
 });
 
+const bridgeOutput = resolve(mcpDirectory, "bridge.mjs");
+await build({
+  entryPoints: [resolve(repositoryDirectory, "apps", "mcp-server", "src", "bridge.ts")],
+  outfile: bridgeOutput,
+  bundle: true,
+  format: "esm",
+  legalComments: "none",
+  minify: false,
+  platform: "node",
+  sourcemap: false,
+  target: "node24",
+});
+
 const mcpBytes = await readFile(mcpOutput);
+const bridgeBytes = await readFile(bridgeOutput);
 const manifest = {
   artifact: "OwnContext MCP runtime",
   classification: "unsigned-developer-preview",
   entry: "cli.mjs",
   sha256: createHash("sha256").update(mcpBytes).digest("hex"),
+  bridge: "bridge.mjs",
+  bridgeSha256: createHash("sha256").update(bridgeBytes).digest("hex"),
 };
 await writeFile(
   resolve(mcpDirectory, "runtime-manifest.json"),
