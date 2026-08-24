@@ -748,13 +748,13 @@ $brokerProcess = $null
 $brokerSmokeCompleted = $false
 
 try {
-  [void](Invoke-BoundedProcess `
+  $setupResult = Invoke-BoundedProcess `
     -FilePath $setupPath `
     -ArgumentList @("--silent") `
     -WorkingDirectory ([IO.Path]::GetDirectoryName($setupPath)) `
     -EnvironmentOverrides $isolatedEnvironment `
     -RemoveEnvironment @("ELECTRON_RUN_AS_NODE") `
-    -TimeoutMilliseconds 90000)
+    -TimeoutMilliseconds 90000
 
   try {
     # Setup launches Squirrel's detached Update.exe worker; on a clean
@@ -771,10 +771,15 @@ try {
         Where-Object { $_.Name -match "(?i)owncontext|ohmy" } |
         ForEach-Object { $_.FullName }
     )
+    $squirrelLog = Join-Path $env:LOCALAPPDATA "SquirrelTemp\SquirrelSetup.log"
+    $logTail = if (Test-Path -LiteralPath $squirrelLog -PathType Leaf) {
+      $log = Get-Content -LiteralPath $squirrelLog -Tail 20 -ErrorAction SilentlyContinue
+      " SquirrelSetup.log: $($log -join ' | ')"
+    } else { " SquirrelSetup.log: missing" }
     $suffix = if ($processes.Count -gt 0) {
       " Processes: $($processes -join ' | ')"
     } else {
-      " No matching product process remained. Candidate install directories: $($candidates -join ' | ')"
+      " No matching product process remained. Candidate install directories: $($candidates -join ' | ').$logTail"
     }
     throw "$($_.Exception.Message)$suffix"
   }
