@@ -26,7 +26,8 @@
     "compliance:verify": "node scripts/release-compliance.mjs verify",
     "compliance:verify:draft": "node scripts/release-compliance.mjs verify --draft",
     "release:bundle:generate": "node scripts/release-bundle.mjs generate",
-    "release:bundle:verify": "node scripts/release-bundle.mjs verify"
+    "release:bundle:verify": "node scripts/release-bundle.mjs verify",
+    "release:preflight": "node scripts/release-preflight.mjs"
   },
   "devDependencies": {
     "@electron/asar": "^3.4.1",
