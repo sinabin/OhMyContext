@@ -23,6 +23,13 @@ const lifecycleScriptPath = resolve(
   "scripts",
   "Invoke-InstalledLifecycleSmoke.ps1",
 );
+const installedMcpSmokePath = resolve(
+  import.meta.dirname,
+  "..",
+  ".github",
+  "scripts",
+  "installed-mcp-smoke.mjs",
+);
 
 describe("unsigned alpha workflow policy", () => {
   it("has read-only repository permissions and no release mutation path", async () => {
@@ -87,6 +94,8 @@ describe("unsigned alpha workflow policy", () => {
     expect(lifecycle).toContain("--owncontext-mcp-broker-smoke");
     expect(lifecycle).toContain("OWNCONTEXT_MCP_BROKER_PIPE");
     expect(lifecycle).toContain("encrypted-vault-broker-ready");
-    expect(lifecycle).toContain("brokered");
+    const mcpSmoke = await readFile(installedMcpSmokePath, "utf8");
+    expect(mcpSmoke).toContain("installed-packaged-mcp-broker-search-fetch");
+    expect(mcpSmoke).toContain("brokered");
   });
 });
