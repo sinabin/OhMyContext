@@ -16,6 +16,13 @@ const publicWorkflowPath = resolve(
   "workflows",
   "public-release.yml",
 );
+const lifecycleScriptPath = resolve(
+  import.meta.dirname,
+  "..",
+  ".github",
+  "scripts",
+  "Invoke-InstalledLifecycleSmoke.ps1",
+);
 
 describe("unsigned alpha workflow policy", () => {
   it("has read-only repository permissions and no release mutation path", async () => {
@@ -73,5 +80,13 @@ describe("unsigned alpha workflow policy", () => {
     for (const action of uses) {
       expect(action).toMatch(/^[\w-]+\/[\w-]+@[0-9a-f]{40}$/u);
     }
+  });
+
+  it("requires the clean-machine lifecycle to exercise the encrypted MCP broker", async () => {
+    const lifecycle = await readFile(lifecycleScriptPath, "utf8");
+    expect(lifecycle).toContain("--owncontext-mcp-broker-smoke");
+    expect(lifecycle).toContain("OWNCONTEXT_MCP_BROKER_PIPE");
+    expect(lifecycle).toContain("encrypted-vault-broker-ready");
+    expect(lifecycle).toContain("brokered");
   });
 });
