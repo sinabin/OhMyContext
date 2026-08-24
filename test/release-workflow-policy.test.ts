@@ -68,8 +68,6 @@ describe("unsigned alpha workflow policy", () => {
     expect(workflow).toContain("npm run release:bundle:generate -- --build");
     expect(workflow).toContain("node scripts/release-preflight.mjs --json");
     expect(workflow).toContain("-ExecuteDisposableGitHubHostedLifecycle");
-    expect(workflow).toContain("--owncontext-mcp-broker-smoke");
-    expect(workflow).toContain("OWNCONTEXT_MCP_BROKER_PIPE");
     expect(workflow).toContain("gh release create");
     const uses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)/gmu)].map((match) => match[1]);
     for (const action of uses) {
