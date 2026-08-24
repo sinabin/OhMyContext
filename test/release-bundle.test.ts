@@ -466,6 +466,42 @@ describe("release candidate bundle", () => {
     expect(manifest.readiness.blockers).not.toContain("project-license-unresolved");
   });
 
+  it("requires an explicit status-file approval marker before opening the license gate", async () => {
+    const f = await fixture();
+    const rootPackagePath = join(f.projectRoot, "package.json");
+    const desktopPackagePath = join(f.projectRoot, "apps", "desktop", "package.json");
+    const lockPath = join(f.projectRoot, "package-lock.json");
+    const rootPackage = JSON.parse(await readFile(rootPackagePath, "utf8"));
+    const desktopPackage = JSON.parse(await readFile(desktopPackagePath, "utf8"));
+    const lock = JSON.parse(await readFile(lockPath, "utf8"));
+    rootPackage.license = "MIT";
+    desktopPackage.license = "MIT";
+    lock.packages["apps/desktop"].license = "MIT";
+    await writeFile(rootPackagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+    await writeFile(desktopPackagePath, `${JSON.stringify(desktopPackage, null, 2)}\n`);
+    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+    await writeFile(join(f.projectRoot, "LICENSE"), "future license text\n");
+    await writeFile(
+      join(f.projectRoot, "LICENSE-STATUS.md"),
+      "# License status\n\nPublic release license approval: approved\n",
+    );
+
+    const generated = await generateReleaseBundle({
+      ...f,
+      signatureInspector: f.unsignedInspector,
+    });
+    const manifest = JSON.parse(await readFile(generated.manifestPath, "utf8"));
+    expect(manifest.projectLicense).toMatchObject({
+      status: "release-approved",
+      spdx: "MIT",
+      licenseFilePresent: true,
+      workspaceMetadataConsistent: true,
+      releaseApprovalRecorded: true,
+    });
+    expect(manifest.readiness.blockers).not.toContain("project-license-unresolved");
+    expect(manifest.readiness.blockers).not.toContain("project-license-not-release-approved");
+  });
+
   it("refuses to overwrite an existing evidence bundle", async () => {
     const f = await fixture();
     await generateReleaseBundle({

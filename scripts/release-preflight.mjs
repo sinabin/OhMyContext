@@ -13,6 +13,7 @@ import {
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const JSON_OUTPUT = process.argv.includes("--json");
+const PUBLIC_LICENSE_APPROVAL_PATTERN = /public\s+release\s+license\s+approval\s*:\s*approved/iu;
 
 const checks = [];
 
@@ -125,12 +126,12 @@ async function inspect() {
     typeof license === "string" &&
     workspacePackages.every((pkg) => pkg?.license === license) &&
     (await regularFile(licenseFile)) &&
-    !/not selected|undecided|not for public release|unresolved/iu.test(statusText);
+    PUBLIC_LICENSE_APPROVAL_PATTERN.test(statusText);
   addCheck(
     "project-license",
     workspaceLicensesMatch,
-    workspaceLicensesMatch ? `SPDX ${license} is present and approved` : "project license is absent, inconsistent, or still held as undecided",
-    "Select the project license, add the complete LICENSE text, align workspace metadata, and record maintainer approval.",
+    workspaceLicensesMatch ? `SPDX ${license} is present and explicitly approved for public release` : "project license is absent, inconsistent, or lacks explicit public-release approval",
+    "Select the project license, add the complete LICENSE text, align workspace metadata, and record `Public release license approval: approved` in LICENSE-STATUS.md after maintainer review.",
   );
 
   const profile = process.env.OWNCONTEXT_RELEASE_PROFILE;

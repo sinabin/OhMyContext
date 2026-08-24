@@ -31,7 +31,9 @@ EXE라는 가격 정책만으로 소스코드의 사용·수정·재배포 권�
 2. 루트와 모든 `@owncontext/*` workspace의 버전을 하나의 non-placeholder
    semver로 맞춘다.
 3. 라이선스를 결정하고 완전한 `LICENSE` 파일 및 package metadata를 일치시킨다.
-   결정 근거와 maintainer 승인을 저장소 기록으로 남긴다.
+   결정 근거와 maintainer 승인을 저장소 기록으로 남긴다. 공개 릴리스 승인은
+   `LICENSE-STATUS.md`에 정확히 `Public release license approval: approved`를
+   기록해야 하며, 파일과 metadata만 추가하는 것으로는 게이트가 열리지 않는다.
 4. 공개 목적(무료 개인 데이터 자산화, 신뢰 형성, NextH 유입)을 README와 릴리스
    노트에서 과장 없이 설명한다. 사용자의 데이터가 자동으로 외부로 전송된다고
    오해할 표현은 넣지 않는다.
@@ -94,6 +96,7 @@ npm run test:release-bundle
 ## 실패 시 해석
 
 - `project-license`: 라이선스를 임의로 추가하지 말고 maintainer 결정을 먼저 기록한다.
+  파일·metadata와 별도로 `LICENSE-STATUS.md`의 명시적 공개 승인 표식이 필요하다.
 - `authenticode-signing`: 인증서 파일·비밀번호를 커밋하거나 채팅에 붙여 넣지 않는다.
 - `security-attestation`: 현재 broker 구현과 로컬 smoke는 기반 검증일 뿐, DACL,
   crash/restart, backup, key rotation까지 포함한 공개 승인 증적이 아니다.
@@ -108,4 +111,3 @@ Release가 만들어진 뒤 운영자는 새 Windows 사용자 계정 또는 dis
 설치·업데이트·삭제를 다시 확인하고, README의 다운로드 링크·보안 모델·데이터
 보관 경계를 실제 Release asset과 대조한다. 이 확인은 NextH의 신뢰를 높이는
 제품 경험의 일부이며, 측정되지 않은 telemetry를 추가하는 근거가 아니다.
-

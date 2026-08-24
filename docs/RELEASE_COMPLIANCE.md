@@ -203,7 +203,9 @@ current build profile, compliance mode, provenance, version, and product naming
 are developer-alpha only. The draft checker does not choose a license: even
 consistent package metadata plus a `LICENSE` file remains
 `declared-not-release-approved` until the project records a separate release
-approval.
+approval. The approval is represented by the exact status marker
+`Public release license approval: approved` in `LICENSE-STATUS.md`; a license
+file and matching package metadata alone never open the public gate.
 
 The Windows Authenticode inspector holds the Setup path in a read-only share
 mode that denies concurrent write/delete, computes SHA-256 under that same

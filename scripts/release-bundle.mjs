@@ -37,6 +37,7 @@ const COMPLIANCE_NAMES = [
 ];
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_BYTES = 8 * 1024 * 1024;
+const PUBLIC_LICENSE_APPROVAL_PATTERN = /public\s+release\s+license\s+approval\s*:\s*approved/iu;
 
 export class ReleaseBundleError extends Error {
   constructor(code, message) {
@@ -242,6 +243,7 @@ async function inspectProject(context) {
   const statusPath = resolve(context.projectRoot, "LICENSE-STATUS.md");
   await requireRegularFile(statusPath, "LICENSE-STATUS.md");
   const statusSha256 = await hashFile(statusPath);
+  const statusText = await readFile(statusPath, "utf8");
   const declared = typeof rootPackage.license === "string" ? rootPackage.license : null;
   const licensePath = resolve(context.projectRoot, "LICENSE");
   const licensePresent = await isRegularFile(licensePath);
@@ -252,16 +254,21 @@ async function inspectProject(context) {
     declared.trim() !== "" &&
     workspaceLicenses.length > 0 &&
     workspaceLicenses.every((license) => license === declared);
+  const releaseApproved =
+    metadataConsistent && licensePresent && PUBLIC_LICENSE_APPROVAL_PATTERN.test(statusText);
   return {
     version,
     license: {
-      status: metadataConsistent && licensePresent
-        ? "declared-not-release-approved"
-        : "unresolved",
+      status: releaseApproved
+        ? "release-approved"
+        : metadataConsistent && licensePresent
+          ? "declared-not-release-approved"
+          : "unresolved",
       spdx: metadataConsistent && licensePresent ? declared : null,
       licenseFilePresent: licensePresent,
       licenseFileSha256,
       workspaceMetadataConsistent: metadataConsistent,
+      releaseApprovalRecorded: releaseApproved,
       statusFileSha256: statusSha256,
     },
   };
@@ -593,7 +600,7 @@ function publicReleaseBlockers(project, source, authenticode) {
   }
   if (project.license.status === "unresolved") {
     blockers.push("project-license-unresolved");
-  } else {
+  } else if (project.license.status !== "release-approved") {
     blockers.push("project-license-not-release-approved");
   }
   if (!authenticode.valid) blockers.push("installer-not-authenticode-valid");
