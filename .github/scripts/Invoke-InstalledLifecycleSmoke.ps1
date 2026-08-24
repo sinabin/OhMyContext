@@ -225,6 +225,16 @@ function Get-ProductProcesses {
   return @(Get-Process -Name $ProductProcessName -ErrorAction SilentlyContinue)
 }
 
+function Describe-ProductProcesses {
+  return @(
+    Get-ProductProcesses | ForEach-Object {
+      $path = "unknown"
+      try { $path = [string]$_.Path } catch { }
+      "pid=$($_.Id);path=$path"
+    }
+  )
+}
+
 function Get-OwnContextArpRecords {
   $records = @()
   foreach ($view in @(
@@ -746,9 +756,15 @@ try {
     -RemoveEnvironment @("ELECTRON_RUN_AS_NODE") `
     -TimeoutMilliseconds 90000)
 
-  Wait-Until -TimeoutMilliseconds 30000 -FailureMessage "Silent Setup did not settle." -Condition {
-    (Test-Path -LiteralPath $installRoot -PathType Container) -and
-    @(Get-ProductProcesses).Count -eq 0
+  try {
+    Wait-Until -TimeoutMilliseconds 30000 -FailureMessage "Silent Setup did not settle." -Condition {
+      (Test-Path -LiteralPath $installRoot -PathType Container) -and
+      @(Get-ProductProcesses).Count -eq 0
+    }
+  } catch {
+    $processes = @(Describe-ProductProcesses)
+    $suffix = if ($processes.Count -gt 0) { " Processes: $($processes -join ' | ')" } else { " No matching product process remained." }
+    throw "$($_.Exception.Message)$suffix"
   }
   $installedRoot = Assert-RegularDirectory $installRoot "installed Squirrel root"
   $updateExecutable = Assert-RegularFile (Join-Path $installedRoot "Update.exe") "installed Update.exe"
