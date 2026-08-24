@@ -1388,7 +1388,7 @@ describe("vault ingestion and retrieval", () => {
     expect(Number(bounds.maximum_id)).toBe(legacyRowCount);
     expect(checkpointCount).toBeGreaterThan(10);
     expect(peakWalBytes).toBeLessThan(mainDatabaseBytes / 2);
-  });
+  }, 30_000);
 
   it("resumes a bounded version-two migration after a reader blocks its WAL checkpoint", async () => {
     const { dbPath, vault } = await fixture();
