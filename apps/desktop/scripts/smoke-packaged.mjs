@@ -560,7 +560,9 @@ const encryptedSqliteManifestPath = resolve(
   encryptedSqliteRuntime,
   ENCRYPTED_SQLITE_RUNTIME_MANIFEST,
 );
-const noticePath = resolve(resources, "UNSIGNED-DEVELOPER-PREVIEW.txt");
+const noticePath = releaseProfile.publicRelease
+  ? undefined
+  : resolve(resources, "UNSIGNED-DEVELOPER-PREVIEW.txt");
 const complianceDirectory = resolve(resources, "compliance");
 const compliancePaths = complianceNames.map((name) =>
   resolve(complianceDirectory, name),
@@ -572,7 +574,7 @@ for (const requiredPath of [
   mcpEntry,
   manifestPath,
   encryptedSqliteManifestPath,
-  noticePath,
+  ...(noticePath ? [noticePath] : []),
   ...compliancePaths,
 ]) {
   if (!existsSync(requiredPath)) {
@@ -637,21 +639,28 @@ const encryptedSqliteEvidence = await verifyEncryptedSqliteRuntime({
 if (
   encryptedSqliteEvidence.packageVersion !== ENCRYPTED_SQLITE_PACKAGE_VERSION ||
   encryptedSqliteEvidence.nativeSha256 !== ENCRYPTED_SQLITE_NATIVE_SHA256 ||
-  encryptedSqliteEvidence.manifest.boundary.publicDistributionApproved !== false
+  encryptedSqliteEvidence.manifest.boundary.publicDistributionApproved !==
+    releaseProfile.publicRelease
 ) {
-  throw new Error("Packaged encrypted SQLite developer candidate is invalid.");
+  throw new Error(
+    releaseProfile.publicRelease
+      ? "Packaged encrypted SQLite runtime is not approved for public distribution."
+      : "Packaged encrypted SQLite developer candidate is invalid.",
+  );
 }
 
 await verifyCompliance({
   artifactPath: packagedDirectory,
   projectRoot,
   outputPath: complianceDirectory,
-  draft: true,
+  draft: !releaseProfile.publicRelease,
 });
 
-const notice = await readFile(noticePath, "utf8");
-if (!notice.includes("UNSIGNED") || !notice.includes("non-sensitive")) {
-  throw new Error("Packaged developer-preview notice is incomplete.");
+if (noticePath) {
+  const notice = await readFile(noticePath, "utf8");
+  if (!notice.includes("UNSIGNED") || !notice.includes("non-sensitive")) {
+    throw new Error("Packaged developer-preview notice is incomplete.");
+  }
 }
 
 const temporaryRoot = requireTemporaryRoot(

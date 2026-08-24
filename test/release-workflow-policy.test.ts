@@ -30,6 +30,14 @@ const installedMcpSmokePath = resolve(
   "scripts",
   "installed-mcp-smoke.mjs",
 );
+const packagedSmokePath = resolve(
+  import.meta.dirname,
+  "..",
+  "apps",
+  "desktop",
+  "scripts",
+  "smoke-packaged.mjs",
+);
 
 describe("unsigned alpha workflow policy", () => {
   it("has read-only repository permissions and no release mutation path", async () => {
@@ -97,5 +105,12 @@ describe("unsigned alpha workflow policy", () => {
     const mcpSmoke = await readFile(installedMcpSmokePath, "utf8");
     expect(mcpSmoke).toContain("installed-packaged-mcp-broker-search-fetch");
     expect(mcpSmoke).toContain("brokered");
+  });
+
+  it("keeps preview-only notice and draft compliance checks out of public smoke", async () => {
+    const smoke = await readFile(packagedSmokePath, "utf8");
+    expect(smoke).toContain("draft: !releaseProfile.publicRelease");
+    expect(smoke).toContain("if (noticePath)");
+    expect(smoke).toContain("Packaged encrypted SQLite runtime is not approved for public distribution.");
   });
 });
