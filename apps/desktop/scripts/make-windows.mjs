@@ -7,6 +7,7 @@ import {
   resolveForgeBuildIdentifier,
 } from "./forge-build-id.mjs";
 import { verifyPinnedSquirrelMakerInputs } from "./squirrel-maker-provenance.mjs";
+import { resolveReleaseProfile } from "./release-profile.mjs";
 
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = resolve(scriptsDirectory, "..");
@@ -33,10 +34,11 @@ const electronWinstallerDirectory = resolve(
   "electron-winstaller",
 );
 const buildIdentifier = resolveForgeBuildIdentifier();
+const releaseProfile = resolveReleaseProfile();
 const buildDirectory = resolve(desktopDirectory, "out", buildIdentifier);
 const packagedDirectory = resolve(
   buildDirectory,
-  "OwnContext Developer Preview-win32-x64",
+  releaseProfile.packagedDirectoryName,
 );
 const complianceDirectory = resolve(
   packagedDirectory,
@@ -188,5 +190,5 @@ if (!packageOnly) {
 }
 
 process.stdout.write(
-  `\nUnsigned developer ${packageOnly ? "package" : "artifacts"} created under ${buildDirectory}\n`,
+  `\n${releaseProfile.publicRelease ? "Public" : "Unsigned developer"} ${packageOnly ? "package" : "artifacts"} created under ${buildDirectory}\n`,
 );

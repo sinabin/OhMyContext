@@ -1,6 +1,7 @@
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveForgeBuildIdentifier } from "./scripts/forge-build-id.mjs";
+import { resolveReleaseProfile } from "./scripts/release-profile.mjs";
 
 const desktopDirectory = dirname(fileURLToPath(import.meta.url));
 const generatedRuntime = resolve(desktopDirectory, ".forge-runtime");
@@ -15,6 +16,7 @@ const previewNotice = resolve(
   "UNSIGNED-DEVELOPER-PREVIEW.txt",
 );
 const buildIdentifier = resolveForgeBuildIdentifier();
+const releaseProfile = resolveReleaseProfile();
 
 const allowedApplicationFiles = new Set([
   "package.json",
@@ -51,21 +53,26 @@ const config = {
   buildIdentifier,
   packagerConfig: {
     asar: true,
-    executableName: "OwnContextDeveloperPreview",
+    executableName: releaseProfile.executableName,
+    ...(releaseProfile.publicRelease
+      ? { appVersion: releaseProfile.version, windowsSign: releaseProfile.signing }
+      : {}),
     extraResource: [
       resolve(generatedRuntime, "mcp-server"),
       resolve(generatedRuntime, "encrypted-sqlite-runtime"),
-      previewNotice,
+      ...(releaseProfile.publicRelease ? [] : [previewNotice]),
     ],
     ignore: ignoreNonRuntimeFile,
     overwrite: true,
     prune: false,
     win32metadata: {
-      CompanyName: "OwnContext project contributors",
-      FileDescription: "OwnContext unsigned developer preview",
-      InternalName: "OwnContextDeveloperPreview",
-      OriginalFilename: "OwnContextDeveloperPreview.exe",
-      ProductName: "OwnContext Developer Preview (Unsigned)",
+      CompanyName: releaseProfile.publicRelease
+        ? "NextH and OwnContext contributors"
+        : "OwnContext project contributors",
+      FileDescription: releaseProfile.description,
+      InternalName: releaseProfile.executableName,
+      OriginalFilename: `${releaseProfile.executableName}.exe`,
+      ProductName: releaseProfile.productName,
     },
   },
   makers: [
@@ -73,10 +80,10 @@ const config = {
       name: "@electron-forge/maker-squirrel",
       platforms: ["win32"],
       config: {
-        name: "OwnContextDeveloperPreview",
+        name: releaseProfile.squirrelName,
         authors: "OwnContext project contributors",
-        description:
-          "Unsigned developer preview for non-sensitive OwnContext evaluation data.",
+        description: releaseProfile.description,
+        ...(releaseProfile.publicRelease ? { windowsSign: releaseProfile.signing } : {}),
         nuspecTemplate: squirrelNuspecTemplate,
         // electron-winstaller's default NuSpec template omits these two
         // extensionless/HTML Electron payload files. Keep the installed image
@@ -89,7 +96,7 @@ const config = {
           { src: "version", target: "lib\\net45\\version" },
         ],
         noMsi: true,
-        setupExe: "OwnContext-Developer-Preview-Unsigned-Setup.exe",
+        setupExe: releaseProfile.setupExe,
       },
     },
   ],
