@@ -218,7 +218,7 @@ function renderGuiJourneyScript(): string {
   };
   const failOnVisibleError = () => {
     const message = visibleError();
-    if (message) throw new Error('OwnContext renderer reported an error during GUI smoke.');
+    if (message) throw new Error('OhMyContext renderer reported an error during GUI smoke.');
   };
   const waitFor = async (label, read) => {
     while (Date.now() < deadline) {

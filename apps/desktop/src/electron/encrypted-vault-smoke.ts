@@ -180,7 +180,7 @@ const preparedContexts = new WeakMap<
 /** A single content-free failure for every invocation and verification error. */
 export class EncryptedVaultSmokeError extends Error {
   public constructor() {
-    super("OwnContext packaged encrypted-vault verification failed.");
+    super("OhMyContext packaged encrypted-vault verification failed.");
     this.name = "EncryptedVaultSmokeError";
   }
 }

@@ -119,7 +119,7 @@ function trustedWindowFor(event: IpcMainInvokeEvent): BrowserWindow {
       expectedUrl: pathToFileURL(rendererEntryPath()).href,
     })
   ) {
-    throw new Error("OwnContext rejected an untrusted IPC sender.");
+    throw new Error("OhMyContext rejected an untrusted IPC sender.");
   }
   return window;
 }
@@ -211,7 +211,7 @@ async function initializeVault(resourcesPath: string): Promise<void> {
 }
 
 function requireVault(): Vault {
-  if (!vault) throw new Error("OwnContext vault is not initialized.");
+  if (!vault) throw new Error("OhMyContext vault is not initialized.");
   return vault;
 }
 

@@ -59,7 +59,7 @@ export interface PrepareKeyStorageSmokeOptions {
 
 export class KeyStorageSmokeError extends Error {
   public constructor() {
-    super("OwnContext packaged key-storage verification failed.");
+    super("OhMyContext packaged key-storage verification failed.");
     this.name = "KeyStorageSmokeError";
   }
 }

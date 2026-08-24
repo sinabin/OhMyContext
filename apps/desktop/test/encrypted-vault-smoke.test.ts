@@ -174,7 +174,7 @@ function resourcesPath(): string {
 function expectFixedFailure(error: unknown, context?: EncryptedVaultSmokeContext): void {
   expect(error).toBeInstanceOf(EncryptedVaultSmokeError);
   expect((error as Error).message).toBe(
-    "OwnContext packaged encrypted-vault verification failed.",
+    "OhMyContext packaged encrypted-vault verification failed.",
   );
   if (context) {
     expect(String(error)).not.toContain(context.rootPath);
