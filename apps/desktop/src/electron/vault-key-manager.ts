@@ -16,7 +16,7 @@ import {
   type BigIntStats,
   type Stats,
 } from "node:fs";
-import { isAbsolute, join, parse, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import {
   openEncryptedVaultCandidate,
@@ -389,7 +389,17 @@ function windowsPathComparisonKey(value: string): string {
   // NTFS does not normalize Unicode composition. Lowercase only to make a
   // simple case-variant spelling of the same Windows path stable; dev+ino
   // below distinguishes different directories even on case-sensitive trees.
-  return resolve(value).replaceAll("/", "\\").toLowerCase();
+  return canonicalComparablePath(value).replaceAll("/", "\\").toLowerCase();
+}
+
+function canonicalComparablePath(value: string): string {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    return join(canonicalComparablePath(dirname(normalized)), basename(normalized));
+  }
 }
 
 function deriveVaultIdFromRealRoot(root: ResolvedRealRoot): string {

@@ -12,7 +12,7 @@ import {
   writeSync,
 } from "node:fs";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
 export const VAULT_KEY_ENVELOPE_SCHEMA_VERSION = 1 as const;
@@ -536,16 +536,39 @@ function assertRealDirectory(
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new VaultKeyEnvelopeError(failureCode);
     }
+    assertNoReparseAncestor(directoryPath, failureCode);
     const real = realpathSync.native(directoryPath);
     const expected = resolve(directoryPath);
     const normalizedReal = process.platform === "win32" ? real.toLowerCase() : real;
-    const normalizedExpected = process.platform === "win32" ? expected.toLowerCase() : expected;
+    const normalizedExpected = process.platform === "win32"
+      ? canonicalParentPath(expected).toLowerCase()
+      : expected;
     if (normalizedReal !== normalizedExpected) {
       throw new VaultKeyEnvelopeError(failureCode);
     }
   } catch (error) {
     if (error instanceof VaultKeyEnvelopeError) throw error;
     throw new VaultKeyEnvelopeError(failureCode);
+  }
+}
+
+function canonicalParentPath(value: string): string {
+  const normalized = resolve(value);
+  return join(realpathSync.native(dirname(normalized)), basename(normalized));
+}
+
+function assertNoReparseAncestor(
+  candidate: string,
+  failureCode: "CORRUPT" | "PERSIST_FAILED",
+): void {
+  const normalized = resolve(candidate);
+  const parsed = parse(normalized);
+  let cursor = parsed.root;
+  for (const segment of normalized.slice(parsed.root.length).split(/[\\/]+/u).filter(Boolean)) {
+    cursor = join(cursor, segment);
+    if (lstatSync(cursor).isSymbolicLink()) {
+      throw new VaultKeyEnvelopeError(failureCode);
+    }
   }
 }
 

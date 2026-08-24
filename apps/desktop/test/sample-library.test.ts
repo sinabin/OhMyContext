@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rm,
   symlink,
@@ -44,9 +45,12 @@ describe("built-in sample library materializer", () => {
   it("creates one stable, bounded, versioned Unicode sample inventory", async () => {
     const sample = await materializeSampleLibrary(userDataRoot);
 
+    const canonicalSampleDirectory = await realpath(
+      resolve(userDataRoot, "sample-library", "v1"),
+    );
     expect(sample).toEqual({
       version: SAMPLE_LIBRARY_VERSION,
-      directoryPath: resolve(userDataRoot, "sample-library", "v1"),
+      directoryPath: canonicalSampleDirectory,
       sourceLabel: SAMPLE_LIBRARY_SOURCE_LABEL,
       collection: SAMPLE_LIBRARY_COLLECTION,
       suggestedQuery: SAMPLE_LIBRARY_SUGGESTED_QUERY,

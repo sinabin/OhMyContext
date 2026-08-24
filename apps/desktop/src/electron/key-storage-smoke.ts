@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { open, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   ElectronSafeStorageKeyProtector,
   MAX_VAULT_KEY_ENVELOPE_BYTES,
@@ -101,7 +101,7 @@ export function prepareKeyStorageSmoke(
     if (
       rootMetadata.isSymbolicLink() ||
       !rootMetadata.isDirectory() ||
-      normalizePath(realpathSync.native(rootPath)) !== normalizePath(rootPath) ||
+      normalizePath(realpathSync.native(rootPath)) !== normalizePath(canonicalParentPath(rootPath)) ||
       !isStrictDescendant(temporaryRoot, rootPath)
     ) {
       throw new Error("Invalid smoke root.");
@@ -294,11 +294,21 @@ async function writeExclusiveResult(
 }
 
 function isStrictDescendant(parent: string, child: string): boolean {
-  const difference = relative(parent, child);
+  const difference = relative(canonicalParentPath(parent), canonicalParentPath(child));
   return difference !== "" &&
     difference !== ".." &&
     !difference.startsWith(`..${sep}`) &&
     !isAbsolute(difference);
+}
+
+function canonicalParentPath(value: string): string {
+  const normalized = resolve(value);
+  try {
+    return resolve(realpathSync.native(normalized));
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    return join(canonicalParentPath(dirname(normalized)), basename(normalized));
+  }
 }
 
 function normalizePath(path: string): string {
