@@ -202,10 +202,11 @@ workflow artifact.
 
 The MCP connection deliberately sets `ELECTRON_RUN_AS_NODE=1` for the packaged
 executable because a Windows GUI-subsystem Electron process does not provide a
-reliable stdio transport to Codex. Consequently, the Electron `RunAsNode` fuse
-must remain enabled for this preview. Disabling it without replacing the MCP
-launcher with a separately packaged runtime will break the connection. The
-packaged smoke test is the regression check for this constraint.
+reliable stdio transport to Codex. The packaged child is now a stdio-to-named-
+pipe bridge; the desktop main process keeps the encrypted vault open and serves
+MCP requests through that same-user pipe. Consequently, the Electron `RunAsNode`
+fuse must remain enabled for this preview. The packaged smoke test is the
+regression check for this constraint.
 
 Squirrel installation creates the shortcut but does not connect Codex or Claude
 Code. On an update, OwnContext refreshes each recognizable managed Codex or
@@ -332,9 +333,10 @@ main database file. If another opener completes v3 between the initial version
 read and a blocked checkpoint, the losing opener serializes a fresh version
 read and adopts that completed schema instead of reporting a stale pause.
 
-The normal desktop and MCP routes still select the visibly labeled plaintext
-development storage provider; there is no implicit storage fallback. A separate
-Windows x64 developer candidate uses the exact pinned
+Non-packaged development launches still select the visibly labeled plaintext
+development storage provider; there is no implicit storage fallback. Packaged
+Windows x64 launches use the encrypted provider and brokered MCP route. A
+separate Windows x64 developer candidate uses the exact pinned
 `better-sqlite3-multiple-ciphers` 13.0.3 runtime, checks SQLite3 Multiple
 Ciphers 2.4.0 / SQLite 3.53.4 plus ChaCha20, HMAC, and memory-only temp state,
 and binds a first-run/same-process-reopen lifecycle to an async Electron
@@ -343,13 +345,12 @@ encrypted vault, imports, searches and fetches a fixture, closes and reopens the
 retrieves it again, and finds none of the tested UTF-8/UTF-16/UTF-32 canary
 encodings in the database, present sidecars, envelope, or state journal.
 
-That smoke is an isolated developer-candidate route. It does not switch the
-interactive desktop or packaged MCP server, so their database, FTS, WAL,
-temporary state, configuration backups, and UI status remain plaintext / not
-implemented. A same-user concurrent directory writer can still race the
-provider's post-open WAL path with a hard link; temporary-journal crash
-recovery, directory durability, cross-process locking, DACLs, key rotation, and
-the broker/stdio bridge also remain public-release gates.
+That smoke is an isolated developer-candidate route and does not by itself
+prove packaged clean-machine release readiness. Temporary-journal crash
+recovery, directory durability, cross-process locking, DACLs, key rotation,
+configuration-backup encryption, and the broker's packaged lifecycle evidence
+remain public-release gates. A same-user concurrent directory writer can still
+race the provider's post-open WAL path with a hard link.
 The compatibility probe reads the main header and only applies checksum-valid
 WAL frames when both database mode bytes declare WAL. It does not open SQLite or
 create a plaintext copy, caps inspected WAL input at 256 MiB, and fails closed

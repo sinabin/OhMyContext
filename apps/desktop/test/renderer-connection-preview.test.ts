@@ -37,6 +37,21 @@ describe("renderer-safe connection previews", () => {
     });
   });
 
+  it("labels the packaged broker without disclosing its endpoint or vault path", () => {
+    const brokerLaunch = {
+      ...launch,
+      brokerPipeName: `\\\\.\\pipe\\owncontext-mcp-${"a".repeat(32)}`,
+    };
+    const codex = renderRendererSafeCodexPreview(brokerLaunch);
+    const claude = renderRendererSafeClaudeCodePreview(brokerLaunch);
+    expect(codex).toContain("private local OwnContext broker");
+    expect(codex).not.toContain("OWNCONTEXT_VAULT_PATH");
+    expect(claude).toContain("private local OwnContext broker");
+    expect(claude).not.toContain("OWNCONTEXT_VAULT_PATH");
+    expect(codex).not.toContain("private-user");
+    expect(claude).not.toContain("private-user");
+  });
+
   it("removes real-path snippets from mutation IPC results", () => {
     const result = omitConnectionMutationSnippet({
       ok: true,

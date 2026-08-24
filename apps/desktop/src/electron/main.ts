@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -30,6 +32,11 @@ import {
   type PurgeSourceInput,
   type Vault,
 } from "@owncontext/core";
+import {
+  acceptOwnContextBrokerConnection,
+  createOwnContextServer,
+  OwnContextBrokerServerTransport,
+} from "@owncontext/mcp-server";
 import {
   DIRECTORY_IMPORT_TOKEN_TTL_MS,
   DirectoryImportTokenManager,
@@ -71,6 +78,10 @@ import {
   type GuiSmokeContext,
 } from "./gui-smoke.js";
 import {
+  prepareBrokerSmoke,
+  writeBrokerSmokeReady,
+} from "./broker-smoke.js";
+import {
   beginSquirrelLifecycle,
   createSquirrelUpdateRunner,
 } from "./squirrel-lifecycle.js";
@@ -87,6 +98,8 @@ let activeImport: AbortController | undefined;
 let folderSelectionActive = false;
 let quitAfterImport = false;
 let trustedRendererWebContentsId: number | undefined;
+let mcpBrokerServer: NetServer | undefined;
+const activeMcpBrokerTransports = new Set<OwnContextBrokerServerTransport>();
 const directoryImportTokens = new DirectoryImportTokenManager<PreparedDirectoryImport>();
 
 function rendererEntryPath(): string {
@@ -123,6 +136,59 @@ function shouldUsePackagedEncryption(): boolean {
 
 function encryptedVaultRootPath(): string {
   return join(app.getPath("userData"), "encrypted-vault");
+}
+
+function mcpBrokerPipeName(): string {
+  const userDataDigest = createHash("sha256")
+    .update(app.getPath("userData"), "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  return `\\\\.\\pipe\\owncontext-mcp-${userDataDigest}`;
+}
+
+async function startMcpBroker(): Promise<void> {
+  if (!shouldUsePackagedEncryption() || mcpBrokerServer) return;
+  const server = createServer((socket) => {
+    void handleMcpBrokerConnection(socket);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(mcpBrokerPipeName(), () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  mcpBrokerServer = server;
+}
+
+async function handleMcpBrokerConnection(socket: Socket): Promise<void> {
+  try {
+    const connection = await acceptOwnContextBrokerConnection(socket);
+    const transport = connection.transport;
+    activeMcpBrokerTransports.add(transport);
+    const server = createOwnContextServer(requireVault(), {
+      api: { fetchDocument, searchVault },
+      allowedCollection: "default",
+      clientKind: connection.clientKind,
+    });
+    transport.onclose = () => {
+      activeMcpBrokerTransports.delete(transport);
+      void server.close().catch(() => undefined);
+    };
+    await server.connect(transport);
+  } catch (error) {
+    process.stderr.write(
+      `OwnContext MCP broker rejected a connection: ${error instanceof Error ? error.message : "unknown error"}\n`,
+    );
+    socket.destroy();
+  }
+}
+
+function stopMcpBroker(): void {
+  for (const transport of activeMcpBrokerTransports) void transport.close();
+  activeMcpBrokerTransports.clear();
+  mcpBrokerServer?.close();
+  mcpBrokerServer = undefined;
 }
 
 async function initializeVault(resourcesPath: string): Promise<void> {
@@ -167,6 +233,9 @@ function ownContextMcpLaunch(): OwnContextMcpLaunch & ClaudeCodeMcpLaunch {
     vaultPath: databasePath(),
     allowedCollection: "default",
     runtime: "electron",
+    ...(shouldUsePackagedEncryption()
+      ? { brokerPipeName: mcpBrokerPipeName() }
+      : {}),
   };
 }
 
@@ -402,6 +471,7 @@ function startDesktopApp(
 ): void {
   void app.whenReady().then(async () => {
     await initializeVault(process.resourcesPath);
+    await startMcpBroker();
     ipcMain.handle("vault:status", (event) => {
       trustedWindowFor(event);
       return {
@@ -678,6 +748,8 @@ function startDesktopApp(
       app.quit();
     }
   });
+
+  app.on("before-quit", stopMcpBroker);
 }
 
 app.setAppUserModelId(
@@ -716,6 +788,36 @@ async function bootstrap(): Promise<void> {
       .then(() => app.exit(0))
       .catch(() => {
         process.stderr.write("OwnContext key-storage verification failed.\n");
+        app.exit(1);
+      });
+    return;
+  }
+
+  const brokerSmoke = prepareBrokerSmoke();
+  if (brokerSmoke) {
+    app.setPath("userData", brokerSmoke.userDataPath);
+    void app.whenReady()
+      .then(async () => {
+        await initializeVault(process.resourcesPath);
+        await startMcpBroker();
+        const sample = await materializeSampleLibrary(app.getPath("userData"));
+        const imported = await importOwnContextSampleLibrary(
+          requireVault(),
+          sample.directoryPath,
+        );
+        if (imported.imported < 1) {
+          throw new Error("MCP broker smoke sample import failed.");
+        }
+        writeBrokerSmokeReady(
+          brokerSmoke,
+          mcpBrokerPipeName(),
+          sample.collection,
+          sample.suggestedQuery,
+        );
+      })
+      .catch(() => {
+        stopMcpBroker();
+        process.stderr.write("OwnContext MCP broker verification failed.\n");
         app.exit(1);
       });
     return;

@@ -15,3 +15,12 @@ export {
   type VaultReadApi,
 } from "./server.js";
 export { runStdioServer } from "./stdio.js";
+export {
+  OWNCONTEXT_MCP_BROKER_PIPE,
+  OWNCONTEXT_MCP_BROKER_PROTOCOL,
+  OwnContextBrokerServerTransport,
+  acceptOwnContextBrokerConnection,
+  runBrokerStdioServer,
+  type BrokerClientKind,
+  type BrokerTransportConnection,
+} from "./broker.js";

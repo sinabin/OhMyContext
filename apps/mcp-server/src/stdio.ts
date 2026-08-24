@@ -6,19 +6,31 @@ import {
   resolveClientKind,
   resolveVaultPath,
 } from "./config.js";
+import {
+  OWNCONTEXT_MCP_BROKER_PIPE,
+  runBrokerStdioServer,
+} from "./broker.js";
 import { createOwnContextServer } from "./server.js";
 
 /**
  * Starts the local read-only MCP server on the current process' stdio streams.
+ * Packaged Windows launches select the broker bridge before this direct,
+ * plaintext-development vault path is considered.
  *
  * This module is deliberately import-safe. Importing it does not open a vault,
  * register process listeners, or write to stdout; callers explicitly invoke
  * this function from the Node CLI or another embedding host.
  */
 export async function runStdioServer(): Promise<void> {
-  const vaultPath = resolveVaultPath();
   const allowedCollection = resolveAllowedCollection();
   const clientKind = resolveClientKind();
+  const brokerPipe = process.env[OWNCONTEXT_MCP_BROKER_PIPE]?.trim();
+  if (brokerPipe) {
+    await runBrokerStdioServer(brokerPipe, clientKind);
+    return;
+  }
+
+  const vaultPath = resolveVaultPath();
   mkdirSync(dirname(vaultPath), { recursive: true });
 
   const {

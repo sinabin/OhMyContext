@@ -23,6 +23,13 @@ The executable entry point is `apps/mcp-server/dist/cli.js`. Standard output is
 reserved exclusively for MCP JSON-RPC framing. Startup and tool diagnostics are
 written to standard error.
 
+For a packaged Windows x64 OwnContext launch, the desktop sets
+`OWNCONTEXT_MCP_BROKER_PIPE` instead of `OWNCONTEXT_VAULT_PATH`. In that mode
+this process forwards MCP frames through the desktop-owned same-user named pipe;
+the MCP child does not open SQLite or receive the vault path. Direct
+`OWNCONTEXT_VAULT_PATH` launches are the non-packaged developer path and are not
+appropriate for sensitive public-release data.
+
 ## Vault and collection selection
 
 The MCP tools cannot choose a database. The server resolves exactly one path at

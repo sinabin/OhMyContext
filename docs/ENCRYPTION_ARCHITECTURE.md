@@ -2,15 +2,16 @@
 
 Last updated: 2026-08-24
 
-Status: **Packaged Windows desktop vault prototype verified; MCP broker and release controls remain open**
+Status: **Packaged Windows desktop vault and MCP broker transport prototype verified; release controls remain open**
 
 This document records the encryption architecture selected for the Windows-first
 OwnContext release. It is an implementation contract and spike plan, not a
 security claim. The packaged Windows x64 desktop route now opens the encrypted
-candidate and reports that boundary in the UI. The standalone MCP route still
-opens its configured path through the plaintext development provider; it must
-not be treated as a sensitive-data path until the broker topology below is
-complete.
+candidate and reports that boundary in the UI. Its MCP child is now a stdio
+bridge to the desktop-owned named-pipe broker and does not receive the vault
+path. Direct non-packaged MCP launches still open their configured path through
+the plaintext development provider and must not be treated as sensitive-data
+paths.
 
 macOS support, numeric minimum/recommended hardware specifications, the project
 license, and the final encrypted-SQLite provider are deliberately not decided
@@ -75,17 +76,16 @@ Windows development runtime:
 - `PRAGMA secure_delete = ON` and FTS5's `secure-delete` option support logical
   deletion behavior; neither encrypts a database, index, WAL, backup, or
   temporary file.
-- The packaged MCP command currently launches the Electron executable with
-  `ELECTRON_RUN_AS_NODE=1` and directly opens the vault passed in its environment.
-  On the installed Electron 43.4.1 Windows runtime, a RunAsNode probe returned
-  an Electron module value of type `string` and `safeStorage` as `undefined`.
-  Electron also documents `safeStorage` as a **main-process** API. Therefore the
-  present packaged MCP process is not an acceptable key broker.
+- The packaged MCP command launches the Electron executable with
+  `ELECTRON_RUN_AS_NODE=1` as a stdio bridge. It receives a named-pipe endpoint,
+  not `OWNCONTEXT_VAULT_PATH`, and the desktop main process is the only process
+  that opens the encrypted vault. A RunAsNode process still cannot use
+  Electron `safeStorage`; it is therefore deliberately not a key broker.
 
-These observations prove only the normal desktop/MCP boundary: plaintext is
-possible and application-level encryption is absent from those routes. They do not show that content can be
-securely erased from SSD media, nor that adding a cipher to the main `.sqlite`
-file would automatically protect every auxiliary artifact.
+These observations prove the direct developer boundary and the reason for the
+broker. They do not show that content can be securely erased from SSD media,
+that the packaged broker's OS ACL is sufficient, or that adding a cipher to the
+main `.sqlite` file would automatically protect every auxiliary artifact.
 
 ## Implemented foundation and candidate evidence
 
@@ -173,11 +173,12 @@ normal product vault:
 
 This slice demonstrates that the OS-key API, encrypted provider candidate, and
 key lifecycle can execute together in the packaged Windows main process and
-that the normal packaged desktop UI can use that candidate. It does not switch
-the standalone MCP process to the broker, encrypt client configuration
-backups, or complete migration/rotation/lock behavior. The MCP connection
-therefore remains outside the sensitive-data claim even though the packaged
-desktop status now reports application encryption.
+that the normal packaged desktop UI can use that candidate. The broker
+transport now connects the packaged MCP child to that main-process vault, with
+unit coverage for handshake and JSON-RPC forwarding. It does not yet prove the
+packaged clean-machine broker lifecycle, encrypt client configuration backups,
+or complete migration/rotation/lock behavior; the public sensitive-data claim
+remains gated on those controls.
 
 Primary references:
 
@@ -312,10 +313,11 @@ MCP bridge.
 ## Broker and authenticated named-pipe boundary
 
 The Electron main process becomes a long-lived, single-instance broker while a
-UI window or authorized MCP connection is active. A missing broker may be
-started by the bridge in normal Electron mode with
-`ELECTRON_RUN_AS_NODE` explicitly removed; the bridge waits for a bounded ready
-signal and never opens the vault itself.
+UI window or authorized MCP connection is active. The packaged bridge connects
+to the bounded named-pipe endpoint advertised by the desktop-managed launch,
+waits for a ready signal, and never opens the vault itself. A missing broker is
+currently a fail-closed startup error; the bridge does not start a second
+Electron process or fall back to plaintext.
 
 On Windows, the broker creates a local named pipe using a native Win32 boundary,
 not Node's default security descriptor. The pipe must:

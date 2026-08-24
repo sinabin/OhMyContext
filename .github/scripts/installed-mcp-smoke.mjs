@@ -14,6 +14,7 @@ import {
 } from "@owncontext/core";
 
 const COLLECTION = "installed-lifecycle";
+const BROKER_COLLECTION = "default";
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -26,6 +27,14 @@ function requiredEnvironment(name) {
   const value = process.env[name];
   if (!value || !isAbsolute(value) || value.includes("\0")) {
     throw new Error("Invalid installed MCP smoke boundary.");
+  }
+  return value;
+}
+
+function requiredBrokerPipe() {
+  const value = process.env.OWNCONTEXT_MCP_BROKER_PIPE;
+  if (!value || !/^\\\\\.\\pipe\\owncontext-mcp-[0-9a-f]{32}$/u.test(value)) {
+    throw new Error("Invalid installed MCP broker boundary.");
   }
   return value;
 }
@@ -131,30 +140,36 @@ async function main() {
     requiredEnvironment("OWNCONTEXT_INSTALLED_MCP"),
     installRoot,
   );
+  const brokerPipe = process.env.OWNCONTEXT_MCP_BROKER_PIPE
+    ? requiredBrokerPipe()
+    : undefined;
+  const brokered = brokerPipe !== undefined;
+  const collection = brokered ? BROKER_COLLECTION : COLLECTION;
   const fixtureDirectory = resolve(smokeRoot, "fixture");
   const vaultPath = resolve(smokeRoot, "vault.sqlite");
-  await mkdir(fixtureDirectory, { mode: 0o700 });
+  const searchQuery = brokered ? "weekly review" : `installedlifecycle${randomUUID().replaceAll("-", "")}`;
+  if (!brokered) {
+    await mkdir(fixtureDirectory, { mode: 0o700 });
+    await writeFile(
+      join(fixtureDirectory, "fixture.md"),
+      `# Disposable CI fixture\n\n${searchQuery} verifies installed MCP search and fetch.\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
 
-  const fixtureToken = `installedlifecycle${randomUUID().replaceAll("-", "")}`;
-  await writeFile(
-    join(fixtureDirectory, "fixture.md"),
-    `# Disposable CI fixture\n\n${fixtureToken} verifies installed MCP search and fetch.\n`,
-    { encoding: "utf8", flag: "wx", mode: 0o600 },
-  );
-
-  const vault = openVault(
-    vaultPath,
-    createNodeSqliteDevelopmentStorageProvider(),
-  );
-  try {
-    const imported = await importDirectory(vault, fixtureDirectory, {
-      collection: COLLECTION,
-    });
-    if (imported.imported !== 1 || imported.documents.length !== 1) {
-      throw new Error("Installed MCP fixture import failed.");
+    const vault = openVault(
+      vaultPath,
+      createNodeSqliteDevelopmentStorageProvider(),
+    );
+    try {
+      const imported = await importDirectory(vault, fixtureDirectory, {
+        collection,
+      });
+      if (imported.imported !== 1 || imported.documents.length !== 1) {
+        throw new Error("Installed MCP fixture import failed.");
+      }
+    } finally {
+      vault.close();
     }
-  } finally {
-    vault.close();
   }
 
   const environment = { ...getDefaultEnvironment() };
@@ -175,9 +190,11 @@ async function main() {
     TEMP: environmentDirectories.TEMP,
     TMP: environmentDirectories.TMP,
     NODE_NO_WARNINGS: "1",
-    OWNCONTEXT_ALLOWED_COLLECTION: COLLECTION,
+    OWNCONTEXT_ALLOWED_COLLECTION: collection,
     OWNCONTEXT_CLIENT_KIND: "codex",
-    OWNCONTEXT_VAULT_PATH: vaultPath,
+    ...(brokered
+      ? { OWNCONTEXT_MCP_BROKER_PIPE: brokerPipe }
+      : { OWNCONTEXT_VAULT_PATH: vaultPath }),
   });
 
   const transport = new StdioClientTransport({
@@ -207,7 +224,7 @@ async function main() {
 
     const search = await bounded(client.callTool({
       name: "search",
-      arguments: { query: fixtureToken, collection: COLLECTION },
+      arguments: { query: searchQuery, collection },
     }));
     const results = search.structuredContent?.results;
     if (
@@ -234,7 +251,7 @@ async function main() {
       fetched.isError === true ||
       !document ||
       document.documentId !== issued.documentId ||
-      !document.content.includes(fixtureToken)
+      !document.content.includes(searchQuery)
     ) {
       throw new Error("Installed MCP fetch failed.");
     }
@@ -248,7 +265,10 @@ async function main() {
   process.stdout.write(`${JSON.stringify({
     schemaVersion: 1,
     result: "PASS",
-    control: "installed-packaged-mcp-search-fetch",
+    control: brokered
+      ? "installed-packaged-mcp-broker-search-fetch"
+      : "installed-packaged-mcp-search-fetch",
+    brokered,
     toolCalls: ["search", "fetch"],
     contentFreeEvidence: true,
   })}\n`);

@@ -367,7 +367,9 @@ function Seed-IsolatedClientConfigs {
     [string]$InstalledExecutable,
     [string]$McpEntry,
     [string]$VaultPath,
-    [string]$Canary
+    [string]$Canary,
+    [string]$BrokerPipeName,
+    [string]$AllowedCollection = "installed-lifecycle"
   )
   $codexDirectory = Join-Path $ProfileRoot ".codex"
   [void](New-Item -ItemType Directory -Path $codexDirectory -ErrorAction Stop)
@@ -375,6 +377,11 @@ function Seed-IsolatedClientConfigs {
   $codexPath = Join-Path $codexDirectory "config.toml"
   $claudePath = Join-Path $ClaudeConfigRoot ".claude.json"
 
+  $codexEnvironment = if ($BrokerPipeName) {
+    "OWNCONTEXT_MCP_BROKER_PIPE = $(ConvertTo-TomlString $BrokerPipeName), OWNCONTEXT_ALLOWED_COLLECTION = $(ConvertTo-TomlString $AllowedCollection), OWNCONTEXT_CLIENT_KIND = `"codex`", ELECTRON_RUN_AS_NODE = `"1`""
+  } else {
+    "OWNCONTEXT_VAULT_PATH = $(ConvertTo-TomlString $VaultPath), OWNCONTEXT_ALLOWED_COLLECTION = $(ConvertTo-TomlString $AllowedCollection), OWNCONTEXT_CLIENT_KIND = `"codex`", ELECTRON_RUN_AS_NODE = `"1`""
+  }
   $codexLines = @(
     "model_provider = $(ConvertTo-TomlString $Canary)",
     "",
@@ -382,7 +389,7 @@ function Seed-IsolatedClientConfigs {
     "[mcp_servers.owncontext]",
     "command = $(ConvertTo-TomlString $InstalledExecutable)",
     "args = [$(ConvertTo-TomlString $McpEntry)]",
-    "env = { OWNCONTEXT_VAULT_PATH = $(ConvertTo-TomlString $VaultPath), OWNCONTEXT_ALLOWED_COLLECTION = `"installed-lifecycle`", OWNCONTEXT_CLIENT_KIND = `"codex`", ELECTRON_RUN_AS_NODE = `"1`" }",
+    "env = { $codexEnvironment }",
     $CodexMarkerEnd,
     "[projects.$(ConvertTo-TomlString $Canary)]",
     "trust_level = `"trusted`""
@@ -420,6 +427,17 @@ function Seed-IsolatedClientConfigs {
       "unrelated-ci-canary" = $unrelatedClaudeServer
     }
   }
+  $claudeEnvironment = [ordered]@{
+    OWNCONTEXT_ALLOWED_COLLECTION = $AllowedCollection
+    OWNCONTEXT_CLIENT_KIND = "claude-code"
+    OWNCONTEXT_MANAGED_BY = "owncontext-desktop-v1"
+    ELECTRON_RUN_AS_NODE = "1"
+  }
+  if ($BrokerPipeName) {
+    $claudeEnvironment.OWNCONTEXT_MCP_BROKER_PIPE = $BrokerPipeName
+  } else {
+    $claudeEnvironment.OWNCONTEXT_VAULT_PATH = $VaultPath
+  }
   $claudeRoot = [ordered]@{
     ownContextLifecycleCanary = $rootCanary
     mcpServers = [ordered]@{
@@ -428,13 +446,7 @@ function Seed-IsolatedClientConfigs {
         type = "stdio"
         command = $InstalledExecutable
         args = @($McpEntry)
-        env = [ordered]@{
-          OWNCONTEXT_ALLOWED_COLLECTION = "installed-lifecycle"
-          OWNCONTEXT_CLIENT_KIND = "claude-code"
-          OWNCONTEXT_MANAGED_BY = "owncontext-desktop-v1"
-          OWNCONTEXT_VAULT_PATH = $VaultPath
-          ELECTRON_RUN_AS_NODE = "1"
-        }
+        env = $claudeEnvironment
       }
     }
   }
@@ -681,6 +693,7 @@ if (-not (Test-StrictDescendant $temporaryBase $temporaryRoot)) {
 $profileRoot = Join-Path $temporaryRoot "profile"
 $claudeConfigRoot = Join-Path $temporaryRoot "claude-config"
 $guiRoot = Join-Path $temporaryRoot "gui"
+$brokerSmokeRoot = Join-Path $temporaryRoot "broker-smoke"
 $mcpSmokeRoot = Join-Path $temporaryRoot "mcp"
 $mcpProfileRoot = Join-Path $mcpSmokeRoot "profile"
 $mcpAppDataRoot = Join-Path $mcpSmokeRoot "appdata"
@@ -688,6 +701,7 @@ $mcpLocalAppDataRoot = Join-Path $mcpSmokeRoot "local-appdata"
 $mcpTempRoot = Join-Path $mcpSmokeRoot "temp"
 [void](New-Item -ItemType Directory -Path $profileRoot -ErrorAction Stop)
 [void](New-Item -ItemType Directory -Path $guiRoot -ErrorAction Stop)
+[void](New-Item -ItemType Directory -Path $brokerSmokeRoot -ErrorAction Stop)
 [void](New-Item -ItemType Directory -Path $mcpSmokeRoot -ErrorAction Stop)
 foreach ($mcpEnvironmentDirectory in @(
   $mcpProfileRoot,
@@ -720,6 +734,8 @@ $explicitUninstallCompleted = $false
 $forcedTerminationCompleted = $false
 $cleanProfileRelaunchCompleted = $false
 $forcedProcess = $null
+$brokerProcess = $null
+$brokerSmokeCompleted = $false
 
 try {
   [void](Invoke-BoundedProcess `
@@ -899,6 +915,31 @@ try {
   }
   $cleanProfileRelaunchCompleted = $true
 
+  $brokerEnvironment = @{} + $isolatedEnvironment
+  $brokerEnvironment.OWNCONTEXT_BROKER_SMOKE_ROOT = $brokerSmokeRoot
+  $brokerEnvironment.OWNCONTEXT_BROKER_SMOKE_NONCE = [Guid]::NewGuid().ToString()
+  $brokerProcess = Start-UnobservedProcess `
+    -FilePath $installedExecutable `
+    -ArgumentList @("--owncontext-mcp-broker-smoke") `
+    -WorkingDirectory $applicationRoot `
+    -EnvironmentOverrides $brokerEnvironment `
+    -RemoveEnvironment @("ELECTRON_RUN_AS_NODE")
+  $brokerReadyPath = Join-Path $brokerSmokeRoot "broker-ready.json"
+  Wait-Until -TimeoutMilliseconds 30000 -FailureMessage "Encrypted MCP broker did not become ready." -Condition {
+    (Test-Path -LiteralPath $brokerReadyPath -PathType Leaf) -and
+    -not $brokerProcess.HasExited
+  }
+  $brokerReady = (Read-BoundedUtf8 $brokerReadyPath 16KB) | ConvertFrom-Json -Depth 10
+  if (
+    $brokerReady.status -ne "encrypted-vault-broker-ready" -or
+    $brokerReady.nonce -ne $brokerEnvironment.OWNCONTEXT_BROKER_SMOKE_NONCE -or
+    [string]$brokerReady.pipeName -notmatch "^\\\\[.]\\pipe\\owncontext-mcp-[0-9a-f]{32}$" -or
+    $brokerReady.collection -ne "default" -or
+    $brokerReady.query -ne "weekly review"
+  ) {
+    throw "Encrypted MCP broker readiness evidence is invalid."
+  }
+
   $nodeExecutable = (Get-Command node -CommandType Application -ErrorAction Stop).Source
   $mcpScript = Assert-RegularFile (
     Join-Path $workspace ".github\scripts\installed-mcp-smoke.mjs"
@@ -914,6 +955,7 @@ try {
     OWNCONTEXT_INSTALLED_ROOT = $installedRoot
     OWNCONTEXT_INSTALLED_EXE = $installedExecutable
     OWNCONTEXT_INSTALLED_MCP = $installedMcpEntry
+    OWNCONTEXT_MCP_BROKER_PIPE = [string]$brokerReady.pipeName
   }
   [void](Invoke-BoundedProcess `
     -FilePath $nodeExecutable `
@@ -921,6 +963,11 @@ try {
     -WorkingDirectory $workspace `
     -EnvironmentOverrides $mcpEnvironment `
     -TimeoutMilliseconds 45000)
+  $brokerSmokeCompleted = $true
+  if (-not $brokerProcess.HasExited) { $brokerProcess.Kill($true) }
+  [void]$brokerProcess.WaitForExit(10000)
+  $brokerProcess.Dispose()
+  $brokerProcess = $null
 
   $configFixture = Seed-IsolatedClientConfigs `
     -ProfileRoot $profileRoot `
@@ -928,7 +975,9 @@ try {
     -InstalledExecutable $installedExecutable `
     -McpEntry $installedMcpEntry `
     -VaultPath (Join-Path $mcpSmokeRoot "vault.sqlite") `
-    -Canary ("lifecycle-" + [Guid]::NewGuid().ToString("N"))
+    -Canary ("lifecycle-" + [Guid]::NewGuid().ToString("N")) `
+    -BrokerPipeName ([string]$brokerReady.pipeName) `
+    -AllowedCollection ([string]$brokerReady.collection)
 
   [void](Invoke-BoundedProcess `
     -FilePath $updateExecutable `
@@ -966,7 +1015,7 @@ try {
       "setup-install" = $true
       "no-node-launch" = $true
       "sample-import-and-search" = $true
-      "mcp-search-and-fetch" = $true
+      "mcp-search-and-fetch" = $brokerSmokeCompleted
       "forced-termination-recovery" = $forcedTerminationCompleted
       "managed-client-cleanup" = $true
       "squirrel-uninstall" = $true
@@ -1042,6 +1091,14 @@ finally {
     } catch { }
     try { $forcedProcess.Dispose() } catch { }
     $forcedProcess = $null
+  }
+  if ($null -ne $brokerProcess) {
+    try {
+      if (-not $brokerProcess.HasExited) { $brokerProcess.Kill($true) }
+      [void]$brokerProcess.WaitForExit(5000)
+    } catch { }
+    try { $brokerProcess.Dispose() } catch { }
+    $brokerProcess = $null
   }
   if (-not $explicitUninstallCompleted -and $null -ne $updateExecutable) {
     try {

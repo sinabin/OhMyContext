@@ -108,6 +108,17 @@ describe("Claude Code OwnContext MCP configuration service", () => {
     });
   });
 
+  it("uses the packaged broker without exposing the vault path", () => {
+    const brokerLaunch = {
+      ...launch,
+      brokerPipeName: `\\\\.\\pipe\\owncontext-mcp-${"a".repeat(32)}`,
+    };
+    const generated = renderClaudeCodeMcpConfig(brokerLaunch);
+    expect(generated.env.OWNCONTEXT_MCP_BROKER_PIPE).toBe(brokerLaunch.brokerPipeName);
+    expect(generated.env.OWNCONTEXT_VAULT_PATH).toBeUndefined();
+    expect(JSON.stringify(generated)).not.toContain(launch.vaultPath);
+  });
+
   it("discovers native Windows binaries but never executes a PowerShell shim", async () => {
     const npmBin = join(testRoot, "npm-bin");
     const nativePackageBin = join(

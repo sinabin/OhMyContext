@@ -62,6 +62,8 @@ export interface ClaudeCodeMcpLaunch {
   args: readonly string[];
   /** Absolute path to the private OwnContext SQLite vault. */
   vaultPath: string;
+  /** Windows packaged broker endpoint; when present, the MCP child never opens vaultPath. */
+  brokerPipeName?: string;
   /** Single collection this Claude Code connection may search. */
   allowedCollection: string;
   runtime: "node" | "electron";
@@ -455,7 +457,9 @@ export function renderClaudeCodeMcpConfig(
     OWNCONTEXT_ALLOWED_COLLECTION: launch.allowedCollection,
     OWNCONTEXT_CLIENT_KIND: "claude-code",
     OWNCONTEXT_MANAGED_BY: CLAUDE_CODE_MANAGED_MARKER,
-    OWNCONTEXT_VAULT_PATH: launch.vaultPath,
+    ...(launch.brokerPipeName
+      ? { OWNCONTEXT_MCP_BROKER_PIPE: launch.brokerPipeName }
+      : { OWNCONTEXT_VAULT_PATH: launch.vaultPath }),
   };
   if (launch.runtime === "electron") {
     env.ELECTRON_RUN_AS_NODE = "1";
@@ -963,6 +967,7 @@ function validateLaunch(launch: ClaudeCodeMcpLaunch): void {
     (launch.runtime !== "node" && launch.runtime !== "electron") ||
     !isSafeAbsolutePath(launch.commandPath) ||
     !isSafeAbsolutePath(launch.vaultPath) ||
+    (launch.brokerPipeName !== undefined && !isSafeBrokerPipeName(launch.brokerPipeName)) ||
     !isSafeCollection(launch.allowedCollection) ||
     !Array.isArray(launch.args) ||
     launch.args.length === 0 ||
@@ -971,6 +976,10 @@ function validateLaunch(launch: ClaudeCodeMcpLaunch): void {
   ) {
     throw new InternalClaudeCodePathError("Invalid OwnContext MCP launch.");
   }
+}
+
+function isSafeBrokerPipeName(value: string): boolean {
+  return /^\\\\\.\\pipe\\owncontext-mcp-[0-9a-f]{32}$/u.test(value);
 }
 
 function isSafeCollection(value: unknown): value is string {

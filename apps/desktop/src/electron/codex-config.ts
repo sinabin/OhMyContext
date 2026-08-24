@@ -56,6 +56,8 @@ export interface OwnContextMcpLaunch {
   args: readonly string[];
   /** Absolute path to the private OwnContext SQLite vault. */
   vaultPath: string;
+  /** Windows packaged broker endpoint; when present, the MCP child never opens vaultPath. */
+  brokerPipeName?: string;
   /** Single collection this AI-client connection may search. */
   allowedCollection: string;
   runtime: "node" | "electron";
@@ -292,7 +294,9 @@ export function renderOwnContextMcpBlock(launch: OwnContextMcpLaunch): string {
 
   const args = launch.args.map(tomlString).join(", ");
   const envEntries = [
-    `OWNCONTEXT_VAULT_PATH = ${tomlString(launch.vaultPath)}`,
+    ...(launch.brokerPipeName
+      ? [`OWNCONTEXT_MCP_BROKER_PIPE = ${tomlString(launch.brokerPipeName)}`]
+      : [`OWNCONTEXT_VAULT_PATH = ${tomlString(launch.vaultPath)}`]),
     `OWNCONTEXT_ALLOWED_COLLECTION = ${tomlString(launch.allowedCollection)}`,
     'OWNCONTEXT_CLIENT_KIND = "codex"',
   ];
@@ -323,6 +327,7 @@ function validateLaunch(launch: OwnContextMcpLaunch): void {
     (launch.runtime !== "node" && launch.runtime !== "electron") ||
     !isSafeAbsolutePath(launch.commandPath) ||
     !isSafeAbsolutePath(launch.vaultPath) ||
+    (launch.brokerPipeName !== undefined && !isSafeBrokerPipeName(launch.brokerPipeName)) ||
     !isSafeCollection(launch.allowedCollection) ||
     !Array.isArray(launch.args) ||
     launch.args.length === 0 ||
@@ -331,6 +336,10 @@ function validateLaunch(launch: OwnContextMcpLaunch): void {
   ) {
     throw new InternalPathError();
   }
+}
+
+function isSafeBrokerPipeName(value: string): boolean {
+  return /^\\\\\.\\pipe\\owncontext-mcp-[0-9a-f]{32}$/u.test(value);
 }
 
 function isSafeCollection(value: unknown): value is string {

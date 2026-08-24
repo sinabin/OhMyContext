@@ -68,6 +68,17 @@ describe("Codex OwnContext MCP configuration service", () => {
     expect(await readFile(configPath, "utf8")).toBe(`${preview.snippet}\n`);
   });
 
+  it("uses the packaged broker without exposing the vault path", () => {
+    const brokerLaunch = {
+      ...launch,
+      brokerPipeName: `\\\\.\\pipe\\owncontext-mcp-${"a".repeat(32)}`,
+    };
+    const block = renderOwnContextMcpBlock(brokerLaunch);
+    expect(block).toContain("OWNCONTEXT_MCP_BROKER_PIPE");
+    expect(block).not.toContain("OWNCONTEXT_VAULT_PATH");
+    expect(block).not.toContain(launch.vaultPath);
+  });
+
   it("preserves unrelated TOML byte-for-byte while appending its marked block", async () => {
     const unrelated = [
       'model = "gpt-5"',

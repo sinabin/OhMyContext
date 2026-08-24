@@ -1,6 +1,7 @@
 interface RendererSafeLaunch {
   allowedCollection: string;
   runtime: "node" | "electron";
+  brokerPipeName?: string;
 }
 
 const EXECUTABLE_PLACEHOLDER = "<private local OwnContext executable>";
@@ -11,7 +12,9 @@ export function renderRendererSafeCodexPreview(
   launch: RendererSafeLaunch,
 ): string {
   const environment = [
-    `OWNCONTEXT_VAULT_PATH = ${JSON.stringify(VAULT_PLACEHOLDER)}`,
+    launch.brokerPipeName
+      ? `OWNCONTEXT_MCP_BROKER_PIPE = ${JSON.stringify("<private local OwnContext broker>")}`
+      : `OWNCONTEXT_VAULT_PATH = ${JSON.stringify(VAULT_PLACEHOLDER)}`,
     `OWNCONTEXT_ALLOWED_COLLECTION = ${JSON.stringify(launch.allowedCollection)}`,
     'OWNCONTEXT_CLIENT_KIND = "codex"',
   ];
@@ -38,7 +41,9 @@ export function renderRendererSafeClaudeCodePreview(
       OWNCONTEXT_ALLOWED_COLLECTION: launch.allowedCollection,
       OWNCONTEXT_CLIENT_KIND: "claude-code",
       OWNCONTEXT_MANAGED_BY: "owncontext-desktop-v1",
-      OWNCONTEXT_VAULT_PATH: VAULT_PLACEHOLDER,
+      ...(launch.brokerPipeName
+        ? { OWNCONTEXT_MCP_BROKER_PIPE: "<private local OwnContext broker>" }
+        : { OWNCONTEXT_VAULT_PATH: VAULT_PLACEHOLDER }),
       ...(launch.runtime === "electron" ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     },
   }, null, 2);
