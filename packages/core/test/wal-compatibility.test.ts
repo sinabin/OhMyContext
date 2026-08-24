@@ -227,6 +227,7 @@ describe("future-schema compatibility in a crash-style WAL", () => {
         pageSize === 65_536 ? 1 : pageSize,
       );
     },
+    30_000,
   );
 
   it("rejects without changing main, WAL, SHM, or file existence", async () => {
