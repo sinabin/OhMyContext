@@ -76,7 +76,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh --version
           gh release create $env:PREVIEW_TAG $env:PREVIEW_ZIP $env:PREVIEW_CHECKSUM `
+            --repo $env:GITHUB_REPOSITORY `
             --verify-tag `
             --prerelease `
             --title "OhMyContext $env:PREVIEW_TAG (Portable Preview)" `
