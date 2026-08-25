@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron") as typeof import("electron");
 
 const api = {
+  setLocale: (locale: AppLocale) =>
+    ipcRenderer.invoke("app:set-locale", locale) as Promise<SetLocaleResponse>,
   getStatus: () => ipcRenderer.invoke("vault:status") as Promise<VaultStatus>,
   prepareDirectoryImport: () =>
     ipcRenderer.invoke("vault:prepare-directory-import") as Promise<PrepareDirectoryImportResponse>,
@@ -50,9 +52,15 @@ const api = {
 
 contextBridge.exposeInMainWorld("ownContext", api);
 
+export type AppLocale = "en" | "ko" | "ja" | "zh-CN";
+
+export interface SetLocaleResponse {
+  locale: AppLocale;
+}
+
 export interface VaultStatus {
   ready: boolean;
-  mode: string;
+  mode: "local-vault-bounded-ai";
   encryption: "not-implemented" | "application-encrypted";
 }
 

@@ -25,6 +25,9 @@ decision. Use non-sensitive fixture data only.
 
 - The canonical asset is the original and normalized document with provenance, not an embedding index.
 - Local import and search work without an account, Docker, or an AI API key.
+- The desktop UI is available in English, 한국어, 日本語, and 简体中文; the
+  selected locale is stored locally and applied to renderer, Electron menus,
+  dialogs, dates, numbers, sizes, and plural messages.
 - Retrieved content is untrusted data and never grants permissions.
 - MCP access is read-only in the MVP.
 - Local storage does not imply that excerpts stay local when a cloud AI client requests them.
@@ -69,6 +72,14 @@ the local package, compliance evidence, Git commit, lockfile, packaged
 synthetic Windows key-storage evidence, and the unsigned status. The public
 GitHub workflow creates the Portable ZIP release and a SHA-256 sidecar; it does
 not provide an installer or automatic update channel.
+
+The UI language can be selected from the sidebar as English, 한국어, 日本語, or
+简体中文. On first launch OhMyContext detects the operating-system language;
+unsupported languages fall back to English. The selected language is stored
+locally and changes the renderer, Electron menus, folder picker, confirmation
+dialogs, errors, accessibility labels, and locale-aware formatting immediately.
+User documents and technical identifiers such as `search` and `fetch` remain
+unchanged.
 
 The core now requires every caller to select a storage provider explicitly. The
 normal desktop and MCP routes still select `node-sqlite-development` with a

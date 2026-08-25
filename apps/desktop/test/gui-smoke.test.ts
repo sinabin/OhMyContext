@@ -58,18 +58,21 @@ describe("packaged GUI first-run smoke contract", () => {
     expect(executeJavaScript).toHaveBeenCalledTimes(1);
     expect(executeJavaScript.mock.calls[0]?.[1]).toBe(true);
     const script = executeJavaScript.mock.calls[0]?.[0] ?? "";
-    expect(script).toContain("Try sample library");
-    expect(script).toContain("input[aria-label=\"Search personal context\"]");
+    expect(script).toContain('data-testid="locale-select"');
+    expect(script).toContain("localeSelect.value = 'en'");
+    expect(script).toContain("enabledButtonWithTestId('nav-library')");
+    expect(script).toContain("enabledButtonWithTestId('import-sample')");
+    expect(script).toContain('data-testid="search-input"');
     expect(script).toContain("requestSubmit()");
     expect(script).toContain(".result-card");
-    expect(script).toContain("AI connections");
-    expect(script).toContain('[aria-label="Codex connection"]');
-    expect(script).toContain('[aria-label="Claude Code connection"]');
+    expect(script).toContain("enabledButtonWithTestId('nav-connections')");
+    expect(script).toContain(".connection-card");
     expect(script).toContain("returned context may leave");
-    expect(script).toContain("Access history");
+    expect(script).toContain("enabledButtonWithTestId('nav-history')");
+    expect(script).toContain('data-testid="data-boundary"');
     expect(script).toContain(".history-client.desktop");
     expect(script).toContain("Content-free local log");
-    expect(script).toContain("Refresh history");
+    expect(script).toContain(".history-actions button.secondary:not(.danger-text)");
     expect(script).toContain("does not live-update");
   });
 

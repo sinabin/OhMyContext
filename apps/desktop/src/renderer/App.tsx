@@ -15,6 +15,20 @@ import type {
   VaultSource,
 } from "../electron/preload.cjs";
 import { deriveLibraryOnboarding } from "./onboarding.js";
+import {
+  extensionLabel,
+  issueMessage,
+  issuePath,
+  LOCALE_OPTIONS,
+  localizeConnectionPreview,
+  message,
+  translateMessage,
+  useUiLocale,
+  type LocalizedMessage,
+  type MessageKey,
+  type Translator,
+  type UiLocale,
+} from "./i18n.js";
 
 interface Result {
   documentId: string;
@@ -36,29 +50,8 @@ interface ImportCountSummary {
   skipped: number;
 }
 
-function summarizeImport(record: ImportCountSummary): string {
-  const parts = [
-    `${record.imported} imported`,
-    `${record.updated} updated`,
-    `${record.unchanged} unchanged`,
-    `${record.skipped} skipped`,
-  ];
-
-  return parts.join(" · ");
-}
-
-function summarizeSampleImport(value: unknown): string {
-  if (!value || typeof value !== "object") return "Sample import completed.";
-  const record = value as Record<string, unknown>;
-  if (
-    typeof record.imported !== "number" ||
-    typeof record.updated !== "number" ||
-    typeof record.unchanged !== "number" ||
-    typeof record.skipped !== "number"
-  ) {
-    return "Sample import completed.";
-  }
-  return summarizeImport({
+function summarizeImport(record: ImportCountSummary): LocalizedMessage {
+  return message("import.summary", {
     imported: record.imported,
     updated: record.updated,
     unchanged: record.unchanged,
@@ -66,174 +59,225 @@ function summarizeSampleImport(value: unknown): string {
   });
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
-  if (bytes < 1_024 * 1_024 * 1_024) {
-    return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
+function summarizeSampleImport(value: unknown): LocalizedMessage {
+  if (!value || typeof value !== "object") {
+    return message("import.sampleCompletedAndTrySearch");
   }
-  return `${(bytes / (1_024 * 1_024 * 1_024)).toFixed(1)} GiB`;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.imported !== "number" ||
+    typeof record.updated !== "number" ||
+    typeof record.unchanged !== "number" ||
+    typeof record.skipped !== "number"
+  ) {
+    return message("import.sampleCompletedAndTrySearch");
+  }
+  return message("import.sampleSummaryTrySearch", {
+    imported: record.imported,
+    updated: record.updated,
+    unchanged: record.unchanged,
+    skipped: record.skipped,
+  });
 }
 
-function codexConnectionStatus(preview: CodexConnectionPreview | undefined): string {
-  if (!preview) return "Checking local configuration…";
-  if (!preview.serverReady) return "Local MCP build is unavailable";
+function codexConnectionStatus(
+  preview: CodexConnectionPreview | undefined,
+): LocalizedMessage {
+  if (!preview) return message("status.checkingConfiguration");
+  if (!preview.serverReady) return message("connection.codex.status.serverUnavailable");
 
   switch (preview.status) {
     case "managed":
-      return "Configuration saved by OhMyContext";
+      return message("connection.codex.status.managed");
     case "managed_stale":
-      return "OhMyContext update required for this Codex connection";
+      return message("connection.codex.status.managedStale");
     case "absent":
-      return "Ready to connect";
+      return message("connection.codex.status.ready");
     case "unmanaged_conflict":
-      return "Existing OhMyContext entry needs manual review";
+      return message("connection.codex.status.unmanagedConflict");
     case "malformed_managed_block":
-      return "Managed block was edited or is incomplete";
+      return message("connection.codex.status.malformedBlock");
     case "config_too_large":
-      return "Codex configuration exceeds the safe edit limit";
+      return message("connection.codex.status.tooLarge");
     case "invalid_encoding":
-      return "Codex configuration is not valid UTF-8";
+      return message("connection.codex.status.invalidEncoding");
     case "read_failed":
-      return "Codex configuration could not be read safely";
+      return message("connection.codex.status.readFailed");
   }
 }
 
-function codexMutationNotice(result: CodexConnectionMutation): string {
+function codexMutationNotice(result: CodexConnectionMutation): LocalizedMessage {
   if (result.ok) {
-    if (result.code === "unchanged") return "No configuration change was needed.";
-    const backup = result.backupFileName
-      ? ` Backup created: ${result.backupFileName}.`
-      : "";
-    return result.code === "removed"
-      ? `OhMyContext was disconnected.${backup}`
-      : `Codex connection saved.${backup} Restart Codex to load it.`;
+    if (result.code === "unchanged") {
+      return message("connection.codex.mutation.unchanged");
+    }
+    if (result.code === "removed") {
+      return result.backupFileName
+        ? message("connection.codex.mutation.removedWithBackup", {
+            backupFileName: result.backupFileName,
+          })
+        : message("connection.codex.mutation.removed");
+    }
+    return result.backupFileName
+      ? message("connection.codex.mutation.savedWithBackup", {
+          backupFileName: result.backupFileName,
+        })
+      : message("connection.codex.mutation.saved");
   }
 
-  const messages: Record<string, string> = {
-    server_unavailable: "Build the local MCP server before connecting Codex.",
-    unmanaged_conflict: "OhMyContext found an unmanaged entry and refused to overwrite it.",
-    malformed_managed_block: "The managed block is malformed. Restore its backup or review it manually.",
-    config_too_large: "The configuration is larger than OhMyContext's safe edit limit.",
-    invalid_encoding: "The configuration must be valid UTF-8 before OhMyContext can edit it.",
-    read_failed: "The configuration could not be read safely.",
-    backup_failed: "No change was made because a backup could not be created.",
-    busy: "Another Claude Code configuration change is already in progress.",
-    write_failed: "The configuration could not be replaced safely.",
-    concurrent_change: "The Codex file changed during editing, so OhMyContext left it untouched.",
-    invalid_path: "The generated local launch paths did not pass validation.",
+  const messages: Record<string, MessageKey> = {
+    server_unavailable: "connection.codex.error.serverUnavailable",
+    unmanaged_conflict: "connection.codex.error.unmanagedConflict",
+    malformed_managed_block: "connection.codex.error.malformedBlock",
+    config_too_large: "connection.codex.error.tooLarge",
+    invalid_encoding: "connection.codex.error.invalidEncoding",
+    read_failed: "connection.codex.error.readFailed",
+    backup_failed: "connection.codex.error.backupFailed",
+    busy: "connection.codex.error.busy",
+    write_failed: "connection.codex.error.writeFailed",
+    concurrent_change: "connection.codex.error.concurrentChange",
+    invalid_path: "connection.codex.error.invalidPath",
   };
-  return messages[result.code] ?? "The connection was not changed.";
+  return message(messages[result.code] ?? "connection.codex.error.unknown");
 }
 
 function claudeCodeConnectionStatus(
   preview: ClaudeCodeConnectionPreview | undefined,
-): string {
-  if (!preview) return "Checking local configuration…";
+): LocalizedMessage {
+  if (!preview) return message("status.checkingConfiguration");
 
   switch (preview.status) {
     case "managed":
       return preview.serverReady
-        ? "User-scope configuration saved by OhMyContext"
-        : "Saved configuration points to an unavailable local MCP build";
+        ? message("connection.claude.status.managed")
+        : message("connection.claude.status.managedServerUnavailable");
     case "managed_stale":
-      return "OhMyContext update required for this Claude Code connection";
+      return message("connection.claude.status.managedStale");
     case "absent":
-      if (!preview.serverReady) return "Local MCP build is unavailable";
+      if (!preview.serverReady) return message("connection.claude.status.serverUnavailable");
       return preview.cliAvailable
-        ? "Ready to register with Claude Code"
-        : "Claude Code CLI was not found";
+        ? message("connection.claude.status.ready")
+        : message("connection.claude.status.cliUnavailable");
     case "unmanaged_conflict":
-      return "Existing OhMyContext entry needs manual review";
+      return message("connection.claude.status.unmanagedConflict");
     case "config_too_large":
-      return "Claude configuration exceeds the safe edit limit";
+      return message("connection.claude.status.tooLarge");
     case "invalid_encoding":
-      return "Claude configuration is not valid UTF-8";
+      return message("connection.claude.status.invalidEncoding");
     case "invalid_json":
-      return "Claude configuration contains invalid JSON";
+      return message("connection.claude.status.invalidJson");
     case "invalid_structure":
-      return "Claude configuration has an unsupported structure";
+      return message("connection.claude.status.invalidStructure");
     case "read_failed":
-      return "Claude configuration could not be read safely";
+      return message("connection.claude.status.readFailed");
     case "invalid_config_target":
-      return "CLAUDE_CONFIG_DIR is not a safe absolute directory";
+      return message("connection.claude.status.invalidTarget");
     case "invalid_launch":
-      return "Generated local launch details are invalid";
+      return message("connection.claude.status.invalidLaunch");
   }
 }
 
-function claudeCodeMutationNotice(result: ClaudeCodeConnectionMutation): string {
-  const backup = result.backupFileName
-    ? ` Backup created: ${result.backupFileName}.`
-    : "";
+function claudeCodeMutationNotice(
+  result: ClaudeCodeConnectionMutation,
+): LocalizedMessage {
   if (result.ok) {
-    if (result.code === "unchanged") return "No Claude Code configuration change was needed.";
-    return result.code === "removed"
-      ? `OhMyContext was removed from Claude Code.${backup}`
-      : `Claude Code registration saved.${backup} Restart active Claude Code sessions to load it.`;
+    if (result.code === "unchanged") {
+      return message("connection.claude.mutation.unchanged");
+    }
+    if (result.code === "removed") {
+      return result.backupFileName
+        ? message("connection.claude.mutation.removedWithBackup", {
+            backupFileName: result.backupFileName,
+          })
+        : message("connection.claude.mutation.removed");
+    }
+    return result.backupFileName
+      ? message("connection.claude.mutation.savedWithBackup", {
+          backupFileName: result.backupFileName,
+        })
+      : message("connection.claude.mutation.saved");
   }
 
   if (result.code === "update_removed_retry_required") {
-    return `The outdated connection was removed safely, but the new registration failed.${backup} Retry Connect Claude Code.`;
+    return result.backupFileName
+      ? message("connection.claude.mutation.retryWithBackup", {
+          backupFileName: result.backupFileName,
+        })
+      : message("connection.claude.mutation.retry");
   }
 
   if (result.restored) {
-    return `Claude Code did not keep the requested change, so OhMyContext restored the prior configuration.${backup}`;
+    return result.backupFileName
+      ? message("connection.claude.mutation.restoredWithBackup", {
+          backupFileName: result.backupFileName,
+        })
+      : message("connection.claude.mutation.restored");
   }
 
   if (result.changed) {
-    return `Claude Code changed its configuration but verification failed.${backup} Review or restore the backup before relying on this connection.`;
+    return result.backupFileName
+      ? message("connection.claude.mutation.verificationFailedWithBackup", {
+          backupFileName: result.backupFileName,
+        })
+      : message("connection.claude.mutation.verificationFailed");
   }
 
-  const messages: Record<string, string> = {
-    server_unavailable: "Build the local MCP server before connecting Claude Code.",
-    cli_unavailable: "Install Claude Code and make its CLI available before connecting.",
-    unmanaged_conflict: "OhMyContext found an unmanaged entry and refused to overwrite it.",
-    config_too_large: "The Claude configuration is larger than OhMyContext's safe edit limit.",
-    invalid_encoding: "The Claude configuration must be valid UTF-8.",
-    invalid_json: "Repair the Claude JSON configuration before OhMyContext can edit it.",
-    invalid_structure: "The Claude configuration structure is ambiguous, so OhMyContext left it unchanged.",
-    read_failed: "The Claude configuration could not be read safely.",
-    invalid_config_target: "Use an absolute CLAUDE_CONFIG_DIR, then restart OhMyContext.",
-    backup_failed: "No change was made because a backup could not be created.",
-    concurrent_change: "The Claude configuration changed during setup, so OhMyContext stopped.",
-    cli_failed: "The Claude Code CLI rejected the registration command.",
-    cli_timeout: "The Claude Code CLI did not finish within the safe time limit.",
-    cli_output_limit: "The Claude Code CLI exceeded the safe output limit.",
-    verification_failed: "Claude Code did not save the exact scoped connection.",
-    recovery_required: "Claude Code changed its configuration unexpectedly. Review the backup before retrying.",
-    write_failed: "OhMyContext could not replace the Claude configuration safely.",
-    invalid_launch: "The generated local launch paths did not pass validation.",
+  const messages: Record<string, MessageKey> = {
+    server_unavailable: "connection.claude.error.serverUnavailable",
+    cli_unavailable: "connection.claude.error.cliUnavailable",
+    unmanaged_conflict: "connection.claude.error.unmanagedConflict",
+    config_too_large: "connection.claude.error.tooLarge",
+    invalid_encoding: "connection.claude.error.invalidEncoding",
+    invalid_json: "connection.claude.error.invalidJson",
+    invalid_structure: "connection.claude.error.invalidStructure",
+    read_failed: "connection.claude.error.readFailed",
+    invalid_config_target: "connection.claude.error.invalidTarget",
+    backup_failed: "connection.claude.error.backupFailed",
+    concurrent_change: "connection.claude.error.concurrentChange",
+    cli_failed: "connection.claude.error.cliFailed",
+    cli_timeout: "connection.claude.error.cliTimeout",
+    cli_output_limit: "connection.claude.error.cliOutputLimit",
+    verification_failed: "connection.claude.error.verificationFailed",
+    recovery_required: "connection.claude.error.recoveryRequired",
+    write_failed: "connection.claude.error.writeFailed",
+    invalid_launch: "connection.claude.error.invalidLaunch",
   };
-  return messages[result.code] ?? "The Claude Code connection was not changed.";
+  return message(messages[result.code] ?? "connection.claude.error.unknown");
 }
 
-function progressText(progress: ImportProgress | undefined): string {
-  if (!progress) return "Preparing import…";
-  if (progress.phase === "discovering") return "Discovering supported files…";
-  if (progress.phase === "finalizing") return "Finalizing the atomic vault update…";
-  const total = progress.total === null ? "?" : String(progress.total);
-  return `Importing ${progress.processed} of ${total} · ${progress.imported} new · ${progress.updated} updated`;
+function progressText(progress: ImportProgress | undefined): LocalizedMessage {
+  if (!progress) return message("import.progress.preparing");
+  if (progress.phase === "discovering") return message("import.progress.discovering");
+  if (progress.phase === "finalizing") return message("import.progress.finalizing");
+  return message("import.progress.importing", {
+    processed: progress.processed,
+    total: progress.total ?? "?",
+    imported: progress.imported,
+    updated: progress.updated,
+  });
 }
 
-function receiptStatus(receipt: DeletionReceiptView): string {
+function receiptStatus(receipt: DeletionReceiptView): MessageKey {
   switch (receipt.verificationStatus) {
     case "verified":
-      return "Receipt recorded · source remains absent";
+      return "receipt.status.verified";
     case "target-reintroduced":
-      return "Source was added again";
+      return "receipt.status.reintroduced";
     case "integrity-error":
-      return "Vault integrity needs attention";
+      return "receipt.status.integrityError";
     case "not-found":
-      return "Receipt could not be re-verified";
+      return "receipt.status.notFound";
   }
 }
 
 export function App() {
+  const { locale, setLocale, t } = useUiLocale();
   const [view, setView] = useState<View>("library");
-  const [status, setStatus] = useState("Starting local vault…");
+  const [vaultReady, setVaultReady] = useState(false);
   const [encryption, setEncryption] = useState<"not-implemented" | "application-encrypted">("not-implemented");
-  const [notice, setNotice] = useState("No source imported in this session.");
+  const [notice, setNotice] = useState<LocalizedMessage>(() =>
+    message("status.noSourceThisSession")
+  );
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Result[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -241,8 +285,8 @@ export function App() {
   const [receipts, setReceipts] = useState<DeletionReceiptView[]>([]);
   const [retrievalActivity, setRetrievalActivity] = useState<RetrievalActivityEntry[]>([]);
   const [historyBusy, setHistoryBusy] = useState(false);
-  const [historyNotice, setHistoryNotice] = useState(
-    "This local history records request metadata only, never queries or document content.",
+  const [historyNotice, setHistoryNotice] = useState<LocalizedMessage>(
+    () => message("history.notice.initial"),
   );
   const [activity, setActivity] = useState<Activity>();
   const [progress, setProgress] = useState<ImportProgress>();
@@ -254,17 +298,18 @@ export function App() {
   const [importReport, setImportReport] = useState<DirectoryImportResultView>();
   const [selected, setSelected] = useState<FetchResponse>();
   const [purgePreview, setPurgePreview] = useState<SourcePurgePreview>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<LocalizedMessage>();
   const [codexConnection, setCodexConnection] = useState<CodexConnectionPreview>();
   const [codexConnectionBusy, setCodexConnectionBusy] = useState(false);
-  const [codexConnectionNotice, setCodexConnectionNotice] = useState(
-    "OhMyContext never returns the rest of your Codex configuration to this screen.",
+  const [codexConnectionNotice, setCodexConnectionNotice] = useState<LocalizedMessage>(
+    () => message("connection.codex.notice.initial"),
   );
   const [claudeCodeConnection, setClaudeCodeConnection] =
     useState<ClaudeCodeConnectionPreview>();
   const [claudeCodeConnectionBusy, setClaudeCodeConnectionBusy] = useState(false);
-  const [claudeCodeConnectionNotice, setClaudeCodeConnectionNotice] = useState(
-    "OhMyContext shows only the proposed OhMyContext entry, never the rest of your Claude configuration.",
+  const [claudeCodeConnectionNotice, setClaudeCodeConnectionNotice] =
+    useState<LocalizedMessage>(
+      () => message("connection.claude.notice.initial"),
   );
 
   async function refreshSources() {
@@ -286,7 +331,7 @@ export function App() {
     try {
       await refreshRetrievalActivity();
     } catch {
-      setHistoryNotice("A request completed, but the local history could not be refreshed yet.");
+      setHistoryNotice(message("history.notice.requestRefreshFailed"));
     }
   }
 
@@ -301,18 +346,30 @@ export function App() {
   }
 
   useEffect(() => {
+    void window.ownContext.setLocale(locale)
+      .then(() => {
+        setError((current) =>
+          current?.key === "error.localeSync" ? undefined : current
+        );
+      })
+      .catch(() => {
+        setError(message("error.localeSync"));
+      });
+  }, [locale]);
+
+  useEffect(() => {
     const stopListening = window.ownContext.onImportProgress(setProgress);
     void Promise.all([
       window.ownContext.getStatus().then((value) => {
-        setStatus(value.mode);
         setEncryption(value.encryption);
+        setVaultReady(value.ready);
       }),
       refreshSources(),
       refreshReceipts(),
       refreshRetrievalActivity(),
       refreshCodexConnection(),
       refreshClaudeCodeConnection(),
-    ]).catch((reason: unknown) => setError(String(reason)));
+    ]).catch(() => setError(message("error.initialLoad")));
     return stopListening;
   }, []);
 
@@ -322,9 +379,9 @@ export function App() {
         refreshCodexConnection(),
         // Preview only. Merely opening the screen must not execute a PATH command.
         refreshClaudeCodeConnection(),
-      ]).catch((reason: unknown) => setError(String(reason)));
+      ]).catch(() => setError(message("error.connectionRefresh")));
     } else if (view === "history") {
-      void refreshRetrievalActivity().catch((reason: unknown) => setError(String(reason)));
+      void refreshRetrievalActivity().catch(() => setError(message("error.historyRefresh")));
     }
   }, [view]);
 
@@ -339,23 +396,23 @@ export function App() {
       switch (response.status) {
         case "ready":
           setDirectoryImportPreflight(response);
-          setNotice("Folder scan complete. Review the scope before importing.");
+          setNotice(message("import.notice.scanComplete"));
           break;
         case "canceled":
-          setNotice("Folder selection canceled. Nothing was imported.");
+          setNotice(message("import.notice.selectionCanceled"));
           break;
         case "aborted":
-          setNotice("Folder scan canceled. Nothing was imported.");
+          setNotice(message("import.notice.scanCanceled"));
           break;
         case "busy":
-          setNotice("Wait for the current import or scan to finish.");
+          setNotice(message("import.notice.busy"));
           break;
         case "failed":
-          setError("OhMyContext could not inspect that folder safely. Check access and try again.");
+          setError(message("import.error.inspectFolder"));
           break;
       }
     } catch {
-      setError("OhMyContext could not start the folder scan safely. Try again.");
+      setError(message("import.error.startScan"));
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -388,7 +445,7 @@ export function App() {
         case "imported":
           setDirectoryImportPreflight(undefined);
           if (response.replayed) {
-            setNotice("That preview was already used. Scan the folder again to refresh it.");
+            setNotice(message("import.notice.previewAlreadyUsedRefresh"));
           } else {
             setImportReport(response.result);
             setNotice(summarizeImport(response.result));
@@ -399,31 +456,31 @@ export function App() {
           break;
         case "stale-scan":
           setDirectoryImportPreflight(undefined);
-          setNotice("The folder changed after the preview. Scan it again before importing.");
+          setNotice(message("import.notice.folderChanged"));
           break;
         case "expired":
           setDirectoryImportPreflight(undefined);
-          setNotice("The five-minute preview expired. Scan the folder again.");
+          setNotice(message("import.notice.previewExpired"));
           break;
         case "invalid":
           setDirectoryImportPreflight(undefined);
-          setNotice("That import preview is no longer valid. Scan the folder again.");
+          setNotice(message("import.notice.previewInvalid"));
           break;
         case "aborted":
           setDirectoryImportPreflight(undefined);
-          setNotice("Import canceled. The previous complete vault state was preserved.");
+          setNotice(message("import.notice.canceledPreserved"));
           break;
         case "busy":
-          setNotice("Wait for the current import or scan to finish.");
+          setNotice(message("import.notice.busy"));
           break;
         case "failed":
           setDirectoryImportPreflight(undefined);
-          setError("OhMyContext could not complete that import safely. Scan the folder again.");
+          setError(message("import.error.complete"));
           break;
       }
     } catch {
       setDirectoryImportPreflight(undefined);
-      setError("OhMyContext could not complete that import safely. Scan the folder again.");
+      setError(message("import.error.complete"));
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -444,10 +501,10 @@ export function App() {
         preflight.token,
       );
       setNotice(response.status === "imported"
-        ? "That preview was already used. No additional import was started."
-        : "Import preview canceled. Nothing was imported.");
+        ? message("import.notice.previewAlreadyUsedNoImport")
+        : message("import.notice.previewCanceled"));
     } catch {
-      setError("OhMyContext could not close that preview cleanly. No import was started.");
+      setError(message("import.error.closePreview"));
     } finally {
       setDirectoryDialogBusy(false);
       directoryFlowLock.current = false;
@@ -465,7 +522,7 @@ export function App() {
       await window.ownContext.cancelDirectoryImport(preflight.token);
       await runDirectoryPreflight();
     } catch {
-      setError("OhMyContext could not switch folders safely. Try again.");
+      setError(message("import.error.switchFolder"));
     } finally {
       setDirectoryDialogBusy(false);
       directoryFlowLock.current = false;
@@ -484,18 +541,18 @@ export function App() {
     try {
       const response = await window.ownContext.importSampleLibrary();
       if (response.failed) {
-        setError("OhMyContext could not import the sample safely. Try again.");
+        setError(message("import.error.sample"));
       } else if (response.aborted) {
-        setNotice("Sample import canceled. The previous complete vault state was preserved.");
+        setNotice(message("import.notice.sampleCanceled"));
       } else if (!response.canceled) {
-        setNotice(`${summarizeSampleImport(response.result)} Try the suggested search.`);
+        setNotice(summarizeSampleImport(response.result));
         setQuery(response.suggestedQuery ?? "weekly review");
         setHasSearched(false);
         setResults([]);
         await Promise.all([refreshSources(), refreshReceipts()]);
       }
     } catch {
-      setError("OhMyContext could not import the sample safely. Try again.");
+      setError(message("import.error.sample"));
     } finally {
       setActivity(undefined);
       setProgress(undefined);
@@ -506,8 +563,8 @@ export function App() {
   async function handleCancelImport() {
     await window.ownContext.cancelImport();
     setNotice(activity === "preflight"
-      ? "Cancel requested. Stopping the folder scan…"
-      : "Cancel requested. Rolling back the current import…");
+      ? message("import.notice.cancelScanRequested")
+      : message("import.notice.cancelImportRequested"));
   }
 
   async function handleSearch(event: FormEvent) {
@@ -522,8 +579,8 @@ export function App() {
       const response = await window.ownContext.search(query.trim());
       setResults(response.results as Result[]);
       setHasSearched(true);
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.search"));
     } finally {
       await refreshRetrievalActivityAfterRequest();
       setActivity(undefined);
@@ -535,8 +592,8 @@ export function App() {
     try {
       const response = await window.ownContext.fetch(result.documentId, result.chunkId);
       setSelected(response ?? undefined);
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.fetch"));
     } finally {
       await refreshRetrievalActivityAfterRequest();
     }
@@ -549,13 +606,13 @@ export function App() {
       if (response.status === "ready") {
         setPurgePreview(response.preview);
       } else if (response.status === "import-in-progress") {
-        setNotice("Wait for the current import to finish before removing a source.");
+        setNotice(message("source.notice.waitBeforeRemoval"));
       } else {
-        setNotice("That source is no longer present. No deletion receipt was created.");
+        setNotice(message("source.notice.notPresent"));
         await refreshSources();
       }
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.sourcePreview"));
     }
   }
 
@@ -575,27 +632,27 @@ export function App() {
         setHasSearched(false);
         setSelected(undefined);
         setPurgePreview(undefined);
-        setNotice(
-          `Source removed from OhMyContext · receipt ${response.receipt.receiptId.slice(0, 12)}…`,
-        );
+        setNotice(message("source.notice.removed", {
+          receiptId: `${response.receipt.receiptId.slice(0, 12)}…`,
+        }));
         await Promise.all([refreshSources(), refreshReceipts(), refreshRetrievalActivity()]);
       } else if (response.status === "canceled") {
         setPurgePreview(undefined);
-        setNotice("Removal canceled. The source remains in OhMyContext.");
+        setNotice(message("source.notice.removalCanceled"));
       } else if (response.status === "stale-confirmation") {
         setPurgePreview(undefined);
-        setNotice("The source changed after confirmation. Review its current contents and try again.");
+        setNotice(message("source.notice.changedAfterConfirmation"));
         await refreshSources();
       } else if (response.status === "import-in-progress") {
         setPurgePreview(undefined);
-        setNotice("Removal was blocked because an import is in progress. No data was deleted.");
+        setNotice(message("source.notice.removalBlocked"));
       } else {
         setPurgePreview(undefined);
-        setNotice("The source was already absent. No deletion receipt was created.");
+        setNotice(message("source.notice.alreadyAbsent"));
         await refreshSources();
       }
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.sourceRemoval"));
     } finally {
       setActivity(undefined);
     }
@@ -610,8 +667,8 @@ export function App() {
         : await window.ownContext.removeCodexConnection();
       setCodexConnectionNotice(codexMutationNotice(result));
       await refreshCodexConnection();
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.codexChange"));
     } finally {
       setCodexConnectionBusy(false);
     }
@@ -626,8 +683,8 @@ export function App() {
         : await window.ownContext.removeClaudeCodeConnection();
       setClaudeCodeConnectionNotice(claudeCodeMutationNotice(result));
       await refreshClaudeCodeConnection();
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.claudeCodeChange"));
     } finally {
       setClaudeCodeConnectionBusy(false);
     }
@@ -640,14 +697,12 @@ export function App() {
       const response = await window.ownContext.clearRetrievalActivity();
       if (response.status === "cleared") {
         await refreshRetrievalActivity();
-        setHistoryNotice(
-          `${response.deleted} local request entr${response.deleted === 1 ? "y" : "ies"} cleared. External copies, if any, were not changed.`,
-        );
+        setHistoryNotice(message("history.notice.cleared", { count: response.deleted }));
       } else {
-        setHistoryNotice("Clear canceled. Local access history was not changed.");
+        setHistoryNotice(message("history.notice.clearCanceled"));
       }
-    } catch (reason) {
-      setError(String(reason));
+    } catch {
+      setError(message("error.historyClear"));
     } finally {
       setHistoryBusy(false);
     }
@@ -658,9 +713,9 @@ export function App() {
     setError(undefined);
     try {
       await refreshRetrievalActivity();
-      setHistoryNotice("Local access history refreshed. External requests do not appear live.");
-    } catch (reason) {
-      setError(String(reason));
+      setHistoryNotice(message("history.notice.refreshed"));
+    } catch {
+      setError(message("error.historyRefresh"));
     } finally {
       setHistoryBusy(false);
     }
@@ -674,43 +729,63 @@ export function App() {
         <div className="brand">
           <span className="brand-mark">OC</span>
           <div>
-            <strong>OhMyContext</strong>
-            <small>Your evidence, your control</small>
+            <strong>{t("app.name")}</strong>
+            <small>{t("app.tagline")}</small>
           </div>
         </div>
 
-        <nav aria-label="Primary navigation">
+        <nav aria-label={t("nav.primaryLabel")}>
           <button
+            data-testid="nav-library"
             className={`nav-item ${view === "library" ? "active" : ""}`}
             type="button"
             onClick={() => setView("library")}
           >
-            Library
+            {t("nav.library")}
           </button>
           <button
+            data-testid="nav-connections"
             className={`nav-item ${view === "connections" ? "active" : ""}`}
             type="button"
             onClick={() => setView("connections")}
           >
-            AI connections
+            {t("nav.connections")}
           </button>
           <button
+            data-testid="nav-history"
             className={`nav-item ${view === "history" ? "active" : ""}`}
             type="button"
             onClick={() => setView("history")}
           >
-            Access history
+            {t("nav.history")}
           </button>
         </nav>
+
+        <label className="language-picker">
+          <span>{t("locale.selectorLabel")}</span>
+          <select
+            data-testid="locale-select"
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as UiLocale)}
+          >
+            {LOCALE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
 
         <div className="trust-note">
           <span className="status-dot" />
           <div>
-            <strong>{encryption === "application-encrypted" ? "Encrypted local vault" : "Developer alpha"}</strong>
+            <strong>
+              {encryption === "application-encrypted"
+                ? t("security.encrypted.title")
+                : t("security.developerAlpha.title")}
+            </strong>
             <p>
               {encryption === "application-encrypted"
-                ? "Application-level vault encryption is active for this packaged Windows build. Cloud AI transfer remains a separate boundary."
-                : "Application-level encryption is not implemented yet. Use non-sensitive test data."}
+                ? t("security.encrypted.body")
+                : t("security.developerAlpha.body")}
             </p>
           </div>
         </div>
@@ -721,23 +796,23 @@ export function App() {
           <div>
             <p className="eyebrow">
               {view === "library"
-                ? "LOCAL PERSONAL CONTEXT"
+                ? t("header.library.eyebrow")
                 : view === "connections"
-                  ? "CONTROLLED AI ACCESS"
-                  : "DISCLOSURE ACTIVITY"}
+                  ? t("header.connections.eyebrow")
+                  : t("header.history.eyebrow")}
             </p>
             <h1>
               {view === "library"
-                ? "Find the source behind your memory."
+                ? t("header.library.title")
                 : view === "connections"
-                  ? "Connect context without surrendering the vault."
-                  : "See when context stayed local or could reach AI."}
+                  ? t("header.connections.title")
+                  : t("header.history.title")}
             </h1>
           </div>
           {view === "library" ? (
             isFolderWork ? (
               <button className="secondary danger" type="button" onClick={handleCancelImport}>
-                {activity === "preflight" ? "Cancel scan" : "Cancel import"}
+                {activity === "preflight" ? t("action.cancelScan") : t("action.cancelImport")}
               </button>
             ) : (
               <button
@@ -746,42 +821,54 @@ export function App() {
                 onClick={handleImport}
                 disabled={activity !== undefined}
               >
-                Add a folder
+                {t("action.addFolder")}
               </button>
             )
           ) : null}
         </header>
 
-        <section className="boundary" aria-label="Current data boundary">
+        <section
+          className="boundary"
+          data-testid="data-boundary"
+          aria-label={t("boundary.ariaLabel")}
+        >
           <span>
             {view === "library"
-              ? "Current mode"
+              ? t("boundary.library.label")
               : view === "connections"
-                ? "Transfer boundary"
-                : "History boundary"}
+                ? t("boundary.connections.label")
+                : t("boundary.history.label")}
           </span>
           <strong>
             {view === "library"
-              ? status
+              ? vaultReady
+                ? t("boundary.library.value")
+                : t("status.startingVault")
               : view === "connections"
-                ? "Local retrieval · returned context may leave"
-                : "Content-free local log"}
+                ? t("boundary.connections.value")
+                : t("boundary.history.value")}
           </strong>
           <p>
             {view === "library"
-              ? "Files and the index stay on this device. Returned text and provenance metadata can leave it when an authorized cloud AI requests context."
+              ? t("boundary.library.body")
               : view === "connections"
-                ? "An enabled AI client receives bounded text and provenance metadata from its allowed collection. Its configured model provider may process them outside this device."
-                : "This screen never reveals queries, excerpts, titles, document identifiers, or file paths."}
+                ? t("boundary.connections.body")
+                : t("boundary.history.body")}
           </p>
         </section>
 
-        {error ? <p className="error global-error" role="alert">{error}</p> : null}
+        {error ? (
+          <p className="error global-error" role="alert">
+            {translateMessage(locale, error)}
+          </p>
+        ) : null}
 
         {view === "library" ? (
           <LibraryView
             activity={activity}
-            notice={isFolderWork ? progressText(progress) : notice}
+            locale={locale}
+            t={t}
+            notice={translateMessage(locale, isFolderWork ? progressText(progress) : notice)}
             query={query}
             results={results}
             receipts={receipts}
@@ -812,11 +899,13 @@ export function App() {
           />
         ) : view === "connections" ? (
           <ConnectionsView
+            locale={locale}
+            t={t}
             codexBusy={codexConnectionBusy}
-            codexNotice={codexConnectionNotice}
+            codexNotice={translateMessage(locale, codexConnectionNotice)}
             codexPreview={codexConnection}
             claudeCodeBusy={claudeCodeConnectionBusy}
-            claudeCodeNotice={claudeCodeConnectionNotice}
+            claudeCodeNotice={translateMessage(locale, claudeCodeConnectionNotice)}
             claudeCodePreview={claudeCodeConnection}
             onApplyCodex={() => mutateCodexConnection("apply")}
             onRemoveCodex={() => mutateCodexConnection("remove")}
@@ -825,9 +914,10 @@ export function App() {
           />
         ) : (
           <AccessHistoryView
+            t={t}
             entries={retrievalActivity}
             busy={historyBusy}
-            notice={historyNotice}
+            notice={translateMessage(locale, historyNotice)}
             onClear={clearHistory}
             onRefresh={refreshHistoryManually}
           />
@@ -839,6 +929,8 @@ export function App() {
 
 interface LibraryViewProps {
   activity: Activity | undefined;
+  locale: UiLocale;
+  t: Translator;
   notice: string;
   query: string;
   results: Result[];
@@ -899,76 +991,78 @@ function LibraryView(props: LibraryViewProps) {
     <section className="workspace">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">SEARCH YOUR LIBRARY</p>
-          <h2>Ground every answer in something you wrote.</h2>
+          <p className="eyebrow">{props.t("library.search.eyebrow")}</p>
+          <h2>{props.t("library.search.title")}</h2>
         </div>
         <span className="session-notice">{props.notice}</span>
       </div>
 
       <form className="search" onSubmit={props.onSearch}>
         <input
-          aria-label="Search personal context"
-          placeholder="Try: What did I write about remote work?"
+          data-testid="search-input"
+          aria-label={props.t("library.search.ariaLabel")}
+          placeholder={props.t("library.search.placeholder")}
           value={props.query}
           onChange={(event) => props.onQueryChange(event.target.value)}
         />
         <button type="submit" disabled={props.activity !== undefined || !props.query.trim()}>
-          {props.activity === "search" ? "Searching…" : "Search"}
+          {props.activity === "search" ? props.t("action.searching") : props.t("action.search")}
         </button>
       </form>
 
       {props.importReport ? (
-        <section className="import-report" aria-label="Latest folder import report">
+        <section className="import-report" aria-label={props.t("library.report.ariaLabel")}>
           <div className="import-report-heading">
             <div>
-              <p className="eyebrow">LATEST FOLDER IMPORT</p>
+              <p className="eyebrow">{props.t("library.report.eyebrow")}</p>
               <h3>{props.importReport.skipped > 0
-                ? "Imported with files that need attention"
-                : "Folder import completed"}</h3>
-              <p>{summarizeImport(props.importReport)}</p>
+                ? props.t("library.report.needsAttention")
+                : props.t("library.report.completed")}</h3>
+              <p>{translateMessage(props.locale, summarizeImport(props.importReport))}</p>
             </div>
             <button className="secondary" type="button" onClick={props.onDismissImportReport}>
-              Dismiss
+              {props.t("action.dismiss")}
             </button>
           </div>
           {props.importReport.issueExamples.length > 0 ? (
             <ul className="issue-list">
               {props.importReport.issueExamples.map((issue, index) => (
                 <li key={`${issue.code}-${issue.path}-${index}`}>
-                  <strong>{issue.path}</strong>
-                  <span>{issue.message}</span>
+                  <strong>{issuePath(issue.path, props.t)}</strong>
+                  <span>{issueMessage(issue.code, props.t)}</span>
                 </li>
               ))}
             </ul>
           ) : null}
           {props.importReport.truncatedIssueCount > 0 ? (
             <small>
-              {props.importReport.truncatedIssueCount} more skipped-file issue
-              {props.importReport.truncatedIssueCount === 1 ? "" : "s"} not shown.
+              {props.t("library.report.moreIssues", {
+                count: props.importReport.truncatedIssueCount,
+              })}
             </small>
           ) : null}
         </section>
       ) : null}
 
       {onboarding.canContinueToConnections ? (
-        <section className="setup-bridge" aria-label="Finish AI setup">
+        <section className="setup-bridge" aria-label={props.t("library.setup.ariaLabel")}>
           <div>
-            <p className="eyebrow">NEXT STEP · AI ACCESS</p>
+            <p className="eyebrow">{props.t("library.setup.eyebrow")}</p>
             <h3>
               {onboarding.aiConfigurationSaved
-                ? "An AI connection configuration is saved."
-                : "Your library is ready for an AI client."}
+                ? props.t("library.setup.savedTitle")
+                : props.t("library.setup.readyTitle")}
             </h3>
             <p>
               {onboarding.aiConfigurationSaved
-                ? "Review the allowed collection or disconnect a client. Restart that client after a configuration change."
-                : "Preview the generated MCP structure, permission boundary, and external-transfer notice before anything is changed."}
+                ? props.t("library.setup.savedBody")
+                : props.t("library.setup.readyBody")}
             </p>
           </div>
           <button className="secondary" type="button" onClick={props.onOpenConnections}>
             {onboarding.aiConfigurationSaved
-              ? "Review AI connections"
-              : "Continue to AI connections"}
+              ? props.t("action.reviewConnections")
+              : props.t("action.continueConnections")}
           </button>
         </section>
       ) : null}
@@ -979,20 +1073,18 @@ function LibraryView(props: LibraryViewProps) {
             <div className="empty">
               {onboarding.emptyState === "first-run" ? (
                 <>
-                  <span>SAFE FIRST RUN</span>
-                  <h3>Try OhMyContext without using your files</h3>
-                  <p>
-                    Add a small built-in library of fictional English and Korean notes, or choose
-                    a folder you are authorized to import. Only UTF-8 Markdown and text files are read.
-                  </p>
+                  <span>{props.t("library.empty.firstRun.eyebrow")}</span>
+                  <h3>{props.t("library.empty.firstRun.title")}</h3>
+                  <p>{props.t("library.empty.firstRun.body")}</p>
                   <div className="empty-actions">
                     <button
+                      data-testid="import-sample"
                       className="primary"
                       type="button"
                       disabled={props.activity !== undefined}
                       onClick={props.onImportSample}
                     >
-                      Try sample library
+                      {props.t("action.trySample")}
                     </button>
                     <button
                       className="secondary"
@@ -1000,22 +1092,22 @@ function LibraryView(props: LibraryViewProps) {
                       disabled={props.activity !== undefined}
                       onClick={props.onImportFolder}
                     >
-                      Choose my folder
+                      {props.t("action.chooseMyFolder")}
                     </button>
                   </div>
-                  <small>The sample is non-sensitive, removable, and stored only in this local profile.</small>
+                  <small>{props.t("library.empty.firstRun.sampleNote")}</small>
                 </>
               ) : onboarding.emptyState === "no-results" ? (
                 <>
-                  <span>NO MATCHES</span>
-                  <h3>No result matched this search</h3>
-                  <p>Try fewer words or a phrase that appears in one of the imported documents.</p>
+                  <span>{props.t("library.empty.noMatches.eyebrow")}</span>
+                  <h3>{props.t("library.empty.noMatches.title")}</h3>
+                  <p>{props.t("library.empty.noMatches.body")}</p>
                 </>
               ) : (
                 <>
-                  <span>SEARCH READY</span>
-                  <h3>Search your imported library</h3>
-                  <p>Use the suggested query or words you remember from a Markdown or text file.</p>
+                  <span>{props.t("library.empty.ready.eyebrow")}</span>
+                  <h3>{props.t("library.empty.ready.title")}</h3>
+                  <p>{props.t("library.empty.ready.body")}</p>
                 </>
               )}
             </div>
@@ -1024,35 +1116,44 @@ function LibraryView(props: LibraryViewProps) {
               <article key={result.chunkId} className="result-card">
                 <div className="result-meta">
                   <span title={result.sourceUri}>{result.sourceUri}</span>
-                  <time>{new Date(result.modifiedAt).toLocaleDateString()}</time>
+                  <time>{props.t.date(result.modifiedAt)}</time>
                 </div>
                 <h3>{result.title}</h3>
                 <p>{result.snippet}</p>
                 <div className="result-actions">
                   <code>{result.documentId.slice(0, 16)}…</code>
-                  <button type="button" onClick={() => props.onFetch(result)}>View context</button>
+                  <button type="button" onClick={() => props.onFetch(result)}>
+                    {props.t("action.viewContext")}
+                  </button>
                 </div>
               </article>
             ))
           )}
         </div>
 
-        <aside className="source-panel" aria-label="Imported sources">
-          <p className="eyebrow">SOURCE HEALTH</p>
-          <h3>{props.sources.length} connected folder{props.sources.length === 1 ? "" : "s"}</h3>
+        <aside className="source-panel" aria-label={props.t("library.sources.ariaLabel")}>
+          <p className="eyebrow">{props.t("library.sources.eyebrow")}</p>
+          <h3>{props.t("library.sources.connectedFolders", {
+            count: props.sources.length,
+          })}</h3>
           {props.sources.length === 0 ? (
-            <p className="muted">No source has completed an import.</p>
+            <p className="muted">{props.t("library.sources.none")}</p>
           ) : (
             <div className="source-list">
               {props.sources.map((source) => (
                 <div className="source-item" key={source.sourceId}>
                   <div><span className={`health ${source.status}`} /> <strong>{source.name}</strong></div>
-                  <p>{source.documentCount} documents · {source.collection}</p>
+                  <p>{props.t("library.sources.documents", {
+                    count: source.documentCount,
+                    collection: source.collection,
+                  })}</p>
                   <small title={source.rootUri}>{source.rootUri}</small>
                   <time>
                     {source.lastScannedAt
-                      ? `Scanned ${new Date(source.lastScannedAt).toLocaleString()}`
-                      : "Import incomplete"}
+                      ? props.t("library.sources.scannedAt", {
+                          dateTime: props.t.dateTime(source.lastScannedAt),
+                        })
+                      : props.t("library.sources.incomplete")}
                   </time>
                   <button
                     className="source-remove"
@@ -1060,7 +1161,7 @@ function LibraryView(props: LibraryViewProps) {
                     disabled={props.activity !== undefined}
                     onClick={() => props.onBeginSourcePurge(source)}
                   >
-                    Remove from OhMyContext
+                    {props.t("action.removeFromApp")}
                   </button>
                 </div>
               ))}
@@ -1068,18 +1169,28 @@ function LibraryView(props: LibraryViewProps) {
           )}
 
           {props.receipts.length > 0 ? (
-            <div className="receipt-list" aria-label="Recent deletion receipts">
-              <p className="eyebrow">RECENT REMOVALS</p>
+            <div className="receipt-list" aria-label={props.t("library.receipts.ariaLabel")}>
+              <p className="eyebrow">{props.t("library.receipts.eyebrow")}</p>
               {props.receipts.slice(0, 3).map((receipt) => (
                 <article
                   className={`receipt ${receipt.verificationStatus}`}
                   key={receipt.receiptId}
                 >
-                  <strong>{receiptStatus(receipt)}</strong>
+                  <strong>{props.t(receiptStatus(receipt))}</strong>
                   <p>
-                    {receipt.documentCount} documents · {receipt.revisionCount} revisions · {receipt.chunkCount} chunks
+                    {[
+                      props.t("library.receipts.documentCount", {
+                        count: receipt.documentCount,
+                      }),
+                      props.t("library.receipts.revisionCount", {
+                        count: receipt.revisionCount,
+                      }),
+                      props.t("library.receipts.chunkCount", {
+                        count: receipt.chunkCount,
+                      }),
+                    ].join(" · ")}
                   </p>
-                  <time>{new Date(receipt.completedAt).toLocaleString()}</time>
+                  <time>{props.t.dateTime(receipt.completedAt)}</time>
                   <code title={receipt.receiptId}>{receipt.receiptId.slice(0, 16)}…</code>
                 </article>
               ))}
@@ -1089,13 +1200,13 @@ function LibraryView(props: LibraryViewProps) {
       </div>
 
       {props.selected ? (
-        <div className="context-drawer" role="dialog" aria-label="Retrieved document context">
+        <div className="context-drawer" role="dialog" aria-label={props.t("library.drawer.ariaLabel")}>
           <div className="drawer-heading">
             <div>
-              <p className="eyebrow">BOUNDED DOCUMENT CONTEXT</p>
+              <p className="eyebrow">{props.t("library.drawer.eyebrow")}</p>
               <h3>{props.selected.title}</h3>
             </div>
-            <button type="button" onClick={props.onCloseSelected}>Close</button>
+            <button type="button" onClick={props.onCloseSelected}>{props.t("action.close")}</button>
           </div>
           <p className="source-uri">{props.selected.sourceUri}</p>
           <pre>{props.selected.content}</pre>
@@ -1116,84 +1227,98 @@ function LibraryView(props: LibraryViewProps) {
             }
           }}
         >
-            <p className="eyebrow">REVIEW BEFORE IMPORT</p>
+            <p className="eyebrow">{props.t("preflight.eyebrow")}</p>
             <h3 id="directory-import-preflight-title">
-              Import “{props.directoryImportPreflight.folderLabel}”?
+              {props.t("preflight.title", {
+                folderName: props.directoryImportPreflight.folderLabel,
+              })}
             </h3>
-            <p className="preflight-summary">
-              OhMyContext scanned this folder locally. Confirm the exact supported-file scope before
-              anything is added to your vault.
-            </p>
+            <p className="preflight-summary">{props.t("preflight.summary")}</p>
 
             <dl className="preflight-stats">
               <div>
-                <dt>Ready to import</dt>
-                <dd>{props.directoryImportPreflight.preview.candidateFileCount} files · {formatBytes(props.directoryImportPreflight.preview.candidateBytes)}</dd>
+                <dt>{props.t("preflight.ready")}</dt>
+                <dd>{props.t("preflight.readyValue", {
+                  count: props.directoryImportPreflight.preview.candidateFileCount,
+                  bytes: props.t.bytes(props.directoryImportPreflight.preview.candidateBytes),
+                })}</dd>
               </div>
               <div>
-                <dt>Visited entries</dt>
-                <dd>{props.directoryImportPreflight.preview.visitedEntryCount}</dd>
+                <dt>{props.t("preflight.visited")}</dt>
+                <dd>{props.t.number(props.directoryImportPreflight.preview.visitedEntryCount)}</dd>
               </div>
               <div>
-                <dt>Unsupported files</dt>
-                <dd>{props.directoryImportPreflight.preview.unsupportedFileCount}</dd>
+                <dt>{props.t("preflight.unsupported")}</dt>
+                <dd>{props.t.number(props.directoryImportPreflight.preview.unsupportedFileCount)}</dd>
               </div>
               <div>
-                <dt>Oversized files</dt>
-                <dd>{props.directoryImportPreflight.preview.oversizedFileCount}</dd>
+                <dt>{props.t("preflight.oversized")}</dt>
+                <dd>{props.t.number(props.directoryImportPreflight.preview.oversizedFileCount)}</dd>
               </div>
               <div>
-                <dt>Rejected links</dt>
-                <dd>{props.directoryImportPreflight.preview.rejectedLinkCount}</dd>
+                <dt>{props.t("preflight.rejectedLinks")}</dt>
+                <dd>{props.t.number(props.directoryImportPreflight.preview.rejectedLinkCount)}</dd>
               </div>
               <div>
-                <dt>Read errors</dt>
-                <dd>{props.directoryImportPreflight.preview.readErrorCount}</dd>
+                <dt>{props.t("preflight.readErrors")}</dt>
+                <dd>{props.t.number(props.directoryImportPreflight.preview.readErrorCount)}</dd>
               </div>
             </dl>
 
             <dl className="preflight-boundaries">
               <div>
-                <dt>Supported content</dt>
-                <dd>Valid UTF-8 {props.directoryImportPreflight.preview.supportedExtensions.join(", ")} files only</dd>
+                <dt>{props.t("preflight.supportedContent")}</dt>
+                <dd>{props.t("preflight.supportedContentValue", {
+                  extensions: new Intl.ListFormat(props.locale, {
+                    style: "short",
+                    type: "conjunction",
+                  }).format([...props.directoryImportPreflight.preview.supportedExtensions]),
+                })}</dd>
               </div>
               <div>
-                <dt>Local destination</dt>
-                <dd>Collection “{props.directoryImportPreflight.preview.collection}”</dd>
+                <dt>{props.t("preflight.localDestination")}</dt>
+                <dd>{props.t("preflight.localDestinationValue", {
+                  collection: props.directoryImportPreflight.preview.collection,
+                })}</dd>
               </div>
               <div>
-                <dt>Original folder</dt>
-                <dd>Files are read but never changed or deleted</dd>
+                <dt>{props.t("preflight.originalFolder")}</dt>
+                <dd>{props.t("preflight.originalFolderValue")}</dd>
               </div>
               <div>
-                <dt>Future AI access</dt>
-                <dd>Returned excerpts and provenance may leave this device through an authorized cloud AI</dd>
+                <dt>{props.t("preflight.futureAiAccess")}</dt>
+                <dd>{props.t("preflight.futureAiAccessValue")}</dd>
               </div>
             </dl>
 
             {props.directoryImportPreflight.preview.unsupportedByExtension.length > 0 ? (
               <p className="extension-summary">
-                Excluded by extension: {props.directoryImportPreflight.preview.unsupportedByExtension
-                  .map((item) => `${item.extension} (${item.count})`)
-                  .join(" · ")}
+                {props.t("preflight.excludedExtensions", {
+                  extensions: props.directoryImportPreflight.preview.unsupportedByExtension
+                    .map((item) =>
+                      `${extensionLabel(item.extension, props.t)} (${props.t.number(item.count)})`
+                    )
+                    .join(" · "),
+                })}
               </p>
             ) : null}
 
             {props.directoryImportPreflight.preview.issueExamples.length > 0 ? (
               <div className="preflight-issues">
-                <strong>Examples that will not be imported</strong>
+                <strong>{props.t("preflight.issueExamples")}</strong>
                 <ul className="issue-list">
                   {props.directoryImportPreflight.preview.issueExamples.map((issue, index) => (
                     <li key={`${issue.code}-${issue.path}-${index}`}>
-                      <strong>{issue.path}</strong>
-                      <span>{issue.message}</span>
+                      <strong>{issuePath(issue.path, props.t)}</strong>
+                      <span>{issueMessage(issue.code, props.t)}</span>
                     </li>
                   ))}
                 </ul>
                 {props.directoryImportPreflight.preview.truncatedIssueCount > 0 ? (
                   <small>
-                    {props.directoryImportPreflight.preview.truncatedIssueCount} more issue
-                    {props.directoryImportPreflight.preview.truncatedIssueCount === 1 ? "" : "s"} not shown.
+                    {props.t("preflight.moreIssues", {
+                      count: props.directoryImportPreflight.preview.truncatedIssueCount,
+                    })}
                   </small>
                 ) : null}
               </div>
@@ -1201,12 +1326,11 @@ function LibraryView(props: LibraryViewProps) {
 
             {!props.directoryImportPreflight.preview.canImport ? (
               <p className="preflight-empty" role="status">
-                No supported file is ready. Choose a folder containing valid UTF-8 .md or .txt files.
+                {props.t("preflight.noSupportedFile")}
               </p>
             ) : null}
             <small className="preflight-expiry">
-              This in-memory preview expires after five minutes and can be used only once.
-              OhMyContext checks the approved scope again before import and stops if it no longer matches.
+              {props.t("preflight.expiry")}
             </small>
 
             <div className="preflight-actions">
@@ -1219,7 +1343,9 @@ function LibraryView(props: LibraryViewProps) {
                   ? props.onCancelActiveImport
                   : props.onCancelDirectoryImport}
               >
-                {props.activity === "import" ? "Cancel import" : "Cancel"}
+                {props.activity === "import"
+                  ? props.t("action.cancelImport")
+                  : props.t("action.cancel")}
               </button>
               <button
                 className="secondary"
@@ -1227,7 +1353,7 @@ function LibraryView(props: LibraryViewProps) {
                 disabled={props.directoryDialogBusy || props.activity !== undefined}
                 onClick={props.onChooseAnotherDirectory}
               >
-                Choose another folder
+                {props.t("action.chooseAnotherFolder")}
               </button>
               <button
                 className="primary"
@@ -1236,8 +1362,10 @@ function LibraryView(props: LibraryViewProps) {
                 onClick={props.onConfirmDirectoryImport}
               >
                 {props.activity === "import"
-                  ? "Importing…"
-                  : `Import ${props.directoryImportPreflight.preview.candidateFileCount} file${props.directoryImportPreflight.preview.candidateFileCount === 1 ? "" : "s"}`}
+                  ? props.t("action.importing")
+                  : props.t("preflight.importFiles", {
+                      count: props.directoryImportPreflight.preview.candidateFileCount,
+                    })}
               </button>
             </div>
         </dialog>
@@ -1251,34 +1379,31 @@ function LibraryView(props: LibraryViewProps) {
             aria-modal="true"
             aria-labelledby="purge-source-title"
           >
-            <p className="eyebrow">CONFIRM LOCAL REMOVAL</p>
-            <h3 id="purge-source-title">Remove “{props.purgePreview.name}” from OhMyContext?</h3>
+            <p className="eyebrow">{props.t("purge.eyebrow")}</p>
+            <h3 id="purge-source-title">{props.t("purge.title", {
+              sourceName: props.purgePreview.name,
+            })}</h3>
             <p className="purge-summary">
-              This removes the indexed local copy of {props.purgePreview.documentCount} document
-              {props.purgePreview.documentCount === 1 ? "" : "s"}, every stored revision, chunks,
-              search-index entries, and linked retrieval-audit rows.
+              {props.t("purge.summary", { count: props.purgePreview.documentCount })}
             </p>
             <dl className="purge-boundaries">
               <div>
-                <dt>Original folder</dt>
-                <dd>Not changed or deleted</dd>
+                <dt>{props.t("purge.originalFolder")}</dt>
+                <dd>{props.t("purge.originalFolderValue")}</dd>
               </div>
               <div>
-                <dt>External AI excerpts</dt>
-                <dd>Transferred or in-progress excerpts are outside this removal</dd>
+                <dt>{props.t("purge.externalExcerpts")}</dt>
+                <dd>{props.t("purge.externalExcerptsValue")}</dd>
               </div>
               <div>
-                <dt>Deletion assurance</dt>
-                <dd>Logical non-addressability, not secure disk erasure</dd>
+                <dt>{props.t("purge.assurance")}</dt>
+                <dd>{props.t("purge.assuranceValue")}</dd>
               </div>
             </dl>
             <p className="source-uri" title={props.purgePreview.rootUri}>
               {props.purgePreview.rootUri}
             </p>
-            <p className="purge-reimport-note">
-              Adding this folder again later can import its files again. A content-free receipt is
-              stored only after every local-vault deletion step succeeds.
-            </p>
+            <p className="purge-reimport-note">{props.t("purge.reimportNote")}</p>
             <div className="purge-actions">
               <button
                 className="secondary"
@@ -1286,7 +1411,7 @@ function LibraryView(props: LibraryViewProps) {
                 disabled={props.activity === "purge"}
                 onClick={props.onCancelSourcePurge}
               >
-                Keep source
+                {props.t("action.keepSource")}
               </button>
               <button
                 className="danger-action"
@@ -1294,7 +1419,9 @@ function LibraryView(props: LibraryViewProps) {
                 disabled={props.activity === "purge"}
                 onClick={props.onConfirmSourcePurge}
               >
-                {props.activity === "purge" ? "Removing…" : "Remove local copy"}
+                {props.activity === "purge"
+                  ? props.t("action.removing")
+                  : props.t("action.removeLocalCopy")}
               </button>
             </div>
           </div>
@@ -1305,6 +1432,7 @@ function LibraryView(props: LibraryViewProps) {
 }
 
 interface AccessHistoryViewProps {
+  t: Translator;
   entries: RetrievalActivityEntry[];
   busy: boolean;
   notice: string;
@@ -1312,29 +1440,31 @@ interface AccessHistoryViewProps {
   onRefresh: () => void;
 }
 
-function retrievalClientLabel(clientKind: RetrievalActivityEntry["clientKind"]): string {
+function retrievalClientLabel(
+  clientKind: RetrievalActivityEntry["clientKind"],
+): MessageKey {
   switch (clientKind) {
     case "desktop":
-      return "OhMyContext desktop";
+      return "history.client.desktop";
     case "codex":
-      return "Launch-declared Codex";
+      return "history.client.codex";
     case "claude-code":
-      return "Launch-declared Claude Code";
+      return "history.client.claudeCode";
     case "legacy":
-      return "Earlier OhMyContext version";
+      return "history.client.legacy";
   }
 }
 
-function retrievalBoundary(entry: RetrievalActivityEntry): string {
+function retrievalBoundary(entry: RetrievalActivityEntry): MessageKey {
   switch (entry.clientKind) {
     case "desktop":
-      return "Handled inside the desktop app.";
+      return "history.boundary.desktop";
     case "codex":
-      return "The MCP launch declared Codex; returned data may have been handled by another process or provider.";
+      return "history.boundary.codex";
     case "claude-code":
-      return "The MCP launch declared Claude Code; returned data may have been handled by another process or provider.";
+      return "history.boundary.claudeCode";
     case "legacy":
-      return "The client was not recorded by the earlier vault schema.";
+      return "history.boundary.legacy";
   }
 }
 
@@ -1343,8 +1473,8 @@ function AccessHistoryView(props: AccessHistoryViewProps) {
     <section className="workspace access-history">
       <div className="section-heading history-heading">
         <div>
-          <p className="eyebrow">LOCAL TRANSPARENCY LOG</p>
-          <h2>Review how each request was launch-attributed.</h2>
+          <p className="eyebrow">{props.t("history.eyebrow")}</p>
+          <h2>{props.t("history.title")}</h2>
         </div>
         <div className="history-actions">
           <button
@@ -1353,7 +1483,7 @@ function AccessHistoryView(props: AccessHistoryViewProps) {
             disabled={props.busy}
             onClick={props.onRefresh}
           >
-            {props.busy ? "Working…" : "Refresh history"}
+            {props.busy ? props.t("action.working") : props.t("action.refreshHistory")}
           </button>
           <button
             className="secondary danger-text"
@@ -1361,65 +1491,58 @@ function AccessHistoryView(props: AccessHistoryViewProps) {
             disabled={props.busy || props.entries.length === 0}
             onClick={props.onClear}
           >
-            Clear local history
+            {props.t("action.clearHistory")}
           </button>
         </div>
       </div>
 
       <div className="history-boundary-grid">
         <article>
-          <span className="history-kind local">LOCAL</span>
-          <strong>OhMyContext desktop</strong>
-          <p>Search previews and opened context stay inside this app.</p>
+          <span className="history-kind local">{props.t("history.kind.local")}</span>
+          <strong>{props.t("history.card.localTitle")}</strong>
+          <p>{props.t("history.card.localBody")}</p>
         </article>
         <article>
-          <span className="history-kind external">MAY LEAVE DEVICE</span>
-          <strong>Codex or Claude Code declaration</strong>
-          <p>The launch label is not an authenticated client identity. Returned data may be processed externally.</p>
+          <span className="history-kind external">{props.t("history.kind.mayLeave")}</span>
+          <strong>{props.t("history.card.externalTitle")}</strong>
+          <p>{props.t("history.card.externalBody")}</p>
         </article>
         <article>
-          <span className="history-kind legacy">UNKNOWN CLIENT</span>
-          <strong>Earlier vault entries</strong>
-          <p>Older records lack a client label; request grouping may be split if earlier purges removed rows.</p>
+          <span className="history-kind legacy">{props.t("history.kind.unknown")}</span>
+          <strong>{props.t("history.card.legacyTitle")}</strong>
+          <p>{props.t("history.card.legacyBody")}</p>
         </article>
       </div>
 
       <div className="history-privacy-note">
-        <strong>What this screen excludes</strong>
-        <p>
-          It does not reveal your query, document text, snippets, titles, document or chunk IDs, or
-          file paths. Each displayed entry contains only time, request type, client, and result count.
-          The vault keeps opaque document/chunk linkage only so removing a source can also remove its
-          linked audit rows. External-client labels are managed-launch metadata, not authenticated
-          identities or proof that a named client or provider received or retained data. This view
-          does not live-update for external requests; select Refresh history after using an AI client.
-        </p>
+        <strong>{props.t("history.privacyTitle")}</strong>
+        <p>{props.t("history.privacyBody")}</p>
       </div>
 
       <p className="session-notice history-notice" aria-live="polite">{props.notice}</p>
 
       {props.entries.length === 0 ? (
         <div className="empty history-empty">
-          <span>NO RECORDED REQUESTS</span>
-          <h3>Access history is empty</h3>
-          <p>Search locally or use a connected AI client to create a content-free entry.</p>
+          <span>{props.t("history.empty.eyebrow")}</span>
+          <h3>{props.t("history.empty.title")}</h3>
+          <p>{props.t("history.empty.body")}</p>
         </div>
       ) : (
-        <div className="history-list" aria-label="Recent access history">
+        <div className="history-list" aria-label={props.t("history.list.ariaLabel")}>
           {props.entries.map((entry) => (
             <article className="history-entry" key={entry.requestId}>
               <div className="history-entry-main">
                 <span className={`history-client ${entry.clientKind}`}>
-                  {retrievalClientLabel(entry.clientKind)}
+                  {props.t(retrievalClientLabel(entry.clientKind))}
                 </span>
-                <strong>{entry.eventType === "search" ? "Search response" : "Document context fetch"}</strong>
-                <p>{retrievalBoundary(entry)}</p>
+                <strong>{entry.eventType === "search"
+                  ? props.t("history.event.search")
+                  : props.t("history.event.fetch")}</strong>
+                <p>{props.t(retrievalBoundary(entry))}</p>
               </div>
               <div className="history-entry-meta">
-                <time>{new Date(entry.occurredAt).toLocaleString()}</time>
-                <span>
-                  {entry.resultCount} result{entry.resultCount === 1 ? "" : "s"}
-                </span>
+                <time>{props.t.dateTime(entry.occurredAt)}</time>
+                <span>{props.t("history.resultCount", { count: entry.resultCount })}</span>
               </div>
             </article>
           ))}
@@ -1430,6 +1553,8 @@ function AccessHistoryView(props: AccessHistoryViewProps) {
 }
 
 interface ConnectionsViewProps {
+  locale: UiLocale;
+  t: Translator;
   codexBusy: boolean;
   codexNotice: string;
   codexPreview: CodexConnectionPreview | undefined;
@@ -1452,52 +1577,53 @@ function ConnectionsView(props: ConnectionsViewProps) {
     <section className="workspace connections">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">SUPPORTED AI CLIENTS</p>
-          <h2>Choose where your local context may be used.</h2>
+          <p className="eyebrow">{props.t("connections.eyebrow")}</p>
+          <h2>{props.t("connections.title")}</h2>
         </div>
       </div>
 
-      <article className="connection-card" aria-label="Codex connection">
+      <article className="connection-card" aria-label={props.t("connections.codex.ariaLabel")}>
         <div className="connection-summary">
           <div className="client-icon">CX</div>
           <div>
             <span className={`health ${codexManaged ? "ready" : "incomplete"}`} />
-            <strong>{codexConnectionStatus(props.codexPreview)}</strong>
-            <p>
-              OhMyContext manages one marked block in <code>~/.codex/config.toml</code>.
-              Existing settings stay private and are preserved byte-for-byte.
-            </p>
+            <strong>{translateMessage(
+              props.locale,
+              codexConnectionStatus(props.codexPreview),
+            )}</strong>
+            <p>{props.t("connections.codex.summary")}</p>
           </div>
         </div>
 
         <div className="permission-grid">
-          <div><span>Tools</span><strong>search · fetch</strong></div>
+          <div><span>{props.t("connections.permission.tools")}</span><strong>search · fetch</strong></div>
           <div>
-            <span>Allowed collection</span>
-            <strong>{props.codexPreview?.allowedCollection ?? "Checking…"}</strong>
+            <span>{props.t("connections.permission.allowedCollection")}</span>
+            <strong>{props.codexPreview?.allowedCollection ?? props.t("status.checking")}</strong>
           </div>
-          <div><span>Grant duration</span><strong>Until disconnected</strong></div>
-          <div><span>Writes / transport</span><strong>No document writes · stdio</strong></div>
+          <div>
+            <span>{props.t("connections.permission.grantDuration")}</span>
+            <strong>{props.t("connections.permission.untilDisconnected")}</strong>
+          </div>
+          <div>
+            <span>{props.t("connections.permission.writesTransport")}</span>
+            <strong>{props.t("connections.permission.noWritesStdio")}</strong>
+          </div>
         </div>
 
         <div className="config-preview">
           <div>
-            <p className="eyebrow">CHANGE PREVIEW</p>
-            <p>The generated structure is shown with private local paths redacted. The current Codex file is never sent to the renderer.</p>
+            <p className="eyebrow">{props.t("connections.preview.eyebrow")}</p>
+            <p>{props.t("connections.codex.previewBody")}</p>
           </div>
-          <pre>{props.codexPreview?.snippet || "A safe preview is unavailable until the conflict is resolved."}</pre>
+          <pre>{props.codexPreview?.snippet
+            ? localizeConnectionPreview(props.codexPreview.snippet, props.locale)
+            : props.t("connections.codex.previewUnavailable")}</pre>
         </div>
 
         <div className="connection-warning">
-          <strong>Before connecting</strong>
-          <p>
-            Installing OhMyContext does not connect Codex. Updates refresh the connection only
-            while this marked block is already managed. A timestamped backup is created before an
-            existing file changes. Restart Codex after applying a connection change or updating
-            OhMyContext; an older running MCP process fails closed if the vault schema changed. The
-            AI client or provider may receive returned excerpts and provenance metadata, including
-            titles, source paths, timestamps, and stable document IDs.
-          </p>
+          <strong>{props.t("connections.codex.warningTitle")}</strong>
+          <p>{props.t("connections.codex.warningBody")}</p>
         </div>
 
         <div className="connection-actions">
@@ -1507,7 +1633,11 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.codexBusy || !props.codexPreview?.canApply}
             onClick={props.onApplyCodex}
           >
-            {props.codexBusy ? "Working…" : codexRegistered ? "Update connection" : "Connect Codex"}
+            {props.codexBusy
+              ? props.t("action.working")
+              : codexRegistered
+                ? props.t("action.updateConnection")
+                : props.t("action.connectCodex")}
           </button>
           <button
             className="secondary danger-text"
@@ -1515,54 +1645,54 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.codexBusy || !props.codexPreview?.canRemove}
             onClick={props.onRemoveCodex}
           >
-            Disconnect OhMyContext
+            {props.t("action.disconnectApp")}
           </button>
         </div>
         <p className="connection-notice" aria-live="polite">{props.codexNotice}</p>
       </article>
 
-      <article className="connection-card" aria-label="Claude Code connection">
+      <article className="connection-card" aria-label={props.t("connections.claude.ariaLabel")}>
         <div className="connection-summary">
           <div className="client-icon claude">CC</div>
           <div>
             <span className={`health ${claudeCodeManaged ? "ready" : "incomplete"}`} />
-            <strong>{claudeCodeConnectionStatus(props.claudeCodePreview)}</strong>
-            <p>
-              OhMyContext asks the installed Claude Code CLI to manage the user-scoped
-              <code> owncontext</code> entry. It respects <code>CLAUDE_CONFIG_DIR</code> without
-              showing that private path or unrelated Claude settings on this screen.
-            </p>
+            <strong>{translateMessage(
+              props.locale,
+              claudeCodeConnectionStatus(props.claudeCodePreview),
+            )}</strong>
+            <p>{props.t("connections.claude.summary")}</p>
           </div>
         </div>
 
         <div className="permission-grid">
-          <div><span>Tools</span><strong>search · fetch</strong></div>
+          <div><span>{props.t("connections.permission.tools")}</span><strong>search · fetch</strong></div>
           <div>
-            <span>Allowed collection</span>
-            <strong>{props.claudeCodePreview?.allowedCollection ?? "Checking…"}</strong>
+            <span>{props.t("connections.permission.allowedCollection")}</span>
+            <strong>{props.claudeCodePreview?.allowedCollection ?? props.t("status.checking")}</strong>
           </div>
-          <div><span>Grant duration</span><strong>Until disconnected</strong></div>
-          <div><span>Writes / transport</span><strong>No document writes · stdio</strong></div>
+          <div>
+            <span>{props.t("connections.permission.grantDuration")}</span>
+            <strong>{props.t("connections.permission.untilDisconnected")}</strong>
+          </div>
+          <div>
+            <span>{props.t("connections.permission.writesTransport")}</span>
+            <strong>{props.t("connections.permission.noWritesStdio")}</strong>
+          </div>
         </div>
 
         <div className="config-preview">
           <div>
-            <p className="eyebrow">CHANGE PREVIEW</p>
-            <p>OhMyContext's generated JSON structure is shown with private local paths redacted. Registration uses separated CLI arguments, never a shell command string.</p>
+            <p className="eyebrow">{props.t("connections.preview.eyebrow")}</p>
+            <p>{props.t("connections.claude.previewBody")}</p>
           </div>
-          <pre>{props.claudeCodePreview?.snippet || "A safe preview is unavailable until Claude Code is found or the conflict is resolved."}</pre>
+          <pre>{props.claudeCodePreview?.snippet
+            ? localizeConnectionPreview(props.claudeCodePreview.snippet, props.locale)
+            : props.t("connections.claude.previewUnavailable")}</pre>
         </div>
 
         <div className="connection-warning">
-          <strong>Before registering</strong>
-          <p>
-            Clicking connect runs Claude Code's user-scope MCP command after creating a backup
-            when a configuration already exists. Restart active Claude Code sessions after a
-            connection change or an OhMyContext app update; an older running MCP process fails
-            closed if the vault schema changed. The AI client or provider may receive returned
-            excerpts and provenance metadata, including titles, source paths, timestamps, and
-            stable document IDs.
-          </p>
+          <strong>{props.t("connections.claude.warningTitle")}</strong>
+          <p>{props.t("connections.claude.warningBody")}</p>
         </div>
 
         <div className="connection-actions">
@@ -1573,10 +1703,10 @@ function ConnectionsView(props: ConnectionsViewProps) {
             onClick={props.onApplyClaudeCode}
           >
             {props.claudeCodeBusy
-              ? "Working…"
+              ? props.t("action.working")
               : claudeCodeRegistered
-                ? "Refresh registration"
-                : "Connect Claude Code"}
+                ? props.t("action.refreshRegistration")
+                : props.t("action.connectClaudeCode")}
           </button>
           <button
             className="secondary danger-text"
@@ -1584,16 +1714,16 @@ function ConnectionsView(props: ConnectionsViewProps) {
             disabled={props.claudeCodeBusy || !props.claudeCodePreview?.canRemove}
             onClick={props.onRemoveClaudeCode}
           >
-            Disconnect OhMyContext
+            {props.t("action.disconnectApp")}
           </button>
         </div>
         <p className="connection-notice" aria-live="polite">{props.claudeCodeNotice}</p>
       </article>
 
       <div className="planned-client">
-        <span>Claude Desktop</span>
-        <p>One-click signed Desktop Extension packaging is planned after the release security gates.</p>
-        <strong>Planned</strong>
+        <span>{props.t("connections.planned.name")}</span>
+        <p>{props.t("connections.planned.body")}</p>
+        <strong>{props.t("connections.planned.label")}</strong>
       </div>
     </section>
   );

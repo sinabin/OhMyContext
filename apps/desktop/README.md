@@ -33,6 +33,16 @@ no vault path or collection grant is accepted from renderer input. The MCP
 server rejects a search request that names any other collection and permits
 `fetch` only for IDs issued on that connection.
 
+## Localized interface
+
+The packaged desktop UI supports English, 한국어, 日本語, and 简体中文. On first
+launch it detects the operating-system locale, falls back to English for
+unsupported languages, and stores the user's selection locally. The selection
+updates the renderer, Electron menus, folder picker, confirmation dialogs,
+errors, accessibility labels, and locale-aware dates, numbers, sizes, and
+plural messages. User documents and technical identifiers such as `search` and
+`fetch` intentionally remain unchanged.
+
 ## Folder import boundary
 
 The main process owns the native folder picker and retains the canonical path

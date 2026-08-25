@@ -6,7 +6,7 @@ Last updated: 2026-08-25
 
 | Decision | Result | Consequence |
 | --- | --- | --- |
-| Initial market | Global | English-first product copy with Unicode-safe ingestion; Korean remains a required retrieval benchmark. |
+| Initial market | Global | The desktop UI ships with English, 한국어, 日本語, and 简体中文; Unicode-safe ingestion and retrieval remain required across all four locales. |
 | Desktop installation | Confirmed | The supported Windows onboarding path is a free Portable ZIP. Users extract it and run the executable; no installer, Authenticode signature, Node.js, or terminal is required. |
 | Collection policy | All lawful routes | Prefer official export and read-only APIs, then user-initiated capture. Each connector must document authority and platform constraints. |
 | First desktop platform | Windows x64 | Continue Windows development and packaging. macOS support is deferred without a compatibility promise. |

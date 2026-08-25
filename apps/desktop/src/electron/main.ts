@@ -8,8 +8,10 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   safeStorage,
   type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
 } from "electron";
 import {
   createNodeSqliteDevelopmentStorageProvider,
@@ -92,6 +94,12 @@ import {
   renderRendererSafeClaudeCodePreview,
   renderRendererSafeCodexPreview,
 } from "./renderer-connection-preview.js";
+import {
+  isNativeUiLocale,
+  NATIVE_UI_MESSAGES,
+  resolveNativeUiLocale,
+  type NativeUiLocale,
+} from "./native-i18n.js";
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 let vault: Vault | undefined;
@@ -100,8 +108,97 @@ let folderSelectionActive = false;
 let quitAfterImport = false;
 let trustedRendererWebContentsId: number | undefined;
 let mcpBrokerServer: NetServer | undefined;
+let nativeUiLocale: NativeUiLocale = "en";
 const activeMcpBrokerTransports = new Set<OwnContextBrokerServerTransport>();
 const directoryImportTokens = new DirectoryImportTokenManager<PreparedDirectoryImport>();
+
+function localizedApplicationMenuTemplate(
+  locale: NativeUiLocale,
+  platform: NodeJS.Platform = process.platform,
+): MenuItemConstructorOptions[] {
+  const messages = NATIVE_UI_MESSAGES[locale].menu;
+  const template: MenuItemConstructorOptions[] = [];
+
+  if (platform === "darwin") {
+    template.push({
+      label: messages.app,
+      submenu: [
+        { role: "about", label: messages.about },
+        { type: "separator" },
+        { role: "services", label: messages.services },
+        { type: "separator" },
+        { role: "hide", label: messages.hide },
+        { role: "hideOthers", label: messages.hideOthers },
+        { role: "unhide", label: messages.showAll },
+        { type: "separator" },
+        { role: "quit", label: messages.quit },
+      ],
+    });
+  }
+
+  template.push(
+    {
+      label: messages.file,
+      submenu: [
+        { role: "close", label: messages.close },
+        ...(platform === "darwin"
+          ? []
+          : [
+              { type: "separator" as const },
+              { role: "quit" as const, label: messages.quit },
+            ]),
+      ],
+    },
+    {
+      label: messages.edit,
+      submenu: [
+        { role: "undo", label: messages.undo },
+        { role: "redo", label: messages.redo },
+        { type: "separator" },
+        { role: "cut", label: messages.cut },
+        { role: "copy", label: messages.copy },
+        { role: "paste", label: messages.paste },
+        { role: "selectAll", label: messages.selectAll },
+      ],
+    },
+    {
+      label: messages.view,
+      submenu: [
+        { role: "reload", label: messages.reload },
+        { role: "forceReload", label: messages.forceReload },
+        { role: "toggleDevTools", label: messages.developerTools },
+        { type: "separator" },
+        { role: "resetZoom", label: messages.resetZoom },
+        { role: "zoomIn", label: messages.zoomIn },
+        { role: "zoomOut", label: messages.zoomOut },
+        { type: "separator" },
+        { role: "togglefullscreen", label: messages.fullscreen },
+      ],
+    },
+    {
+      label: messages.window,
+      submenu: platform === "darwin"
+        ? [
+            { role: "minimize", label: messages.minimize },
+            { role: "zoom", label: messages.zoom },
+            { type: "separator" },
+            { role: "front", label: messages.bringAllToFront },
+          ]
+        : [
+            { role: "minimize", label: messages.minimize },
+            { role: "close", label: messages.close },
+          ],
+    },
+  );
+
+  return template;
+}
+
+function updateLocalizedApplicationMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(localizedApplicationMenuTemplate(nativeUiLocale)),
+  );
+}
 
 function rendererEntryPath(): string {
   return join(moduleDirectory, "../dist/renderer/index.html");
@@ -471,13 +568,26 @@ function startDesktopApp(
   guiSmoke?: GuiSmokeContext,
 ): void {
   void app.whenReady().then(async () => {
+    nativeUiLocale = resolveNativeUiLocale(app.getLocale());
+    updateLocalizedApplicationMenu();
     await initializeVault(process.resourcesPath);
     await startMcpBroker();
+    ipcMain.handle("app:set-locale", (event, requestedLocale: unknown) => {
+      trustedWindowFor(event);
+      if (!isNativeUiLocale(requestedLocale)) {
+        throw new TypeError("Unsupported OhMyContext UI locale.");
+      }
+      if (nativeUiLocale !== requestedLocale) {
+        nativeUiLocale = requestedLocale;
+        updateLocalizedApplicationMenu();
+      }
+      return { locale: nativeUiLocale };
+    });
     ipcMain.handle("vault:status", (event) => {
       trustedWindowFor(event);
       return {
         ready: true,
-        mode: "Local vault + bounded AI context and provenance",
+        mode: "local-vault-bounded-ai" as const,
         encryption: shouldUsePackagedEncryption()
           ? ("application-encrypted" as const)
           : ("not-implemented" as const),
@@ -492,8 +602,9 @@ function startDesktopApp(
       directoryImportTokens.abortPendingForSender(event.sender.id);
       folderSelectionActive = true;
       try {
+        const messages = NATIVE_UI_MESSAGES[nativeUiLocale];
         const selection = await dialog.showOpenDialog(parentWindow, {
-          title: "Choose a folder you are authorized to import",
+          title: messages.folderPickerTitle,
           properties: ["openDirectory"],
         });
 
@@ -579,14 +690,13 @@ function startDesktopApp(
 
     ipcMain.handle("vault:clear-retrieval-activity", async (event) => {
       const parentWindow = trustedWindowFor(event);
+      const messages = NATIVE_UI_MESSAGES[nativeUiLocale].clearHistory;
       const confirmation = await dialog.showMessageBox(parentWindow, {
         type: "warning",
-        title: "Clear local access history?",
-        message: "Clear OhMyContext's local access history?",
-        detail:
-          "This removes only the content-free history stored in this local vault. " +
-          "It cannot retract context already returned to an AI client or retained by its provider.",
-        buttons: ["Keep history", "Clear local history"],
+        title: messages.title,
+        message: messages.message,
+        detail: messages.detail,
+        buttons: [messages.keep, messages.confirm],
         defaultId: 0,
         cancelId: 0,
         noLink: true,
@@ -622,14 +732,13 @@ function startDesktopApp(
         return { status: "stale-confirmation" as const };
       }
 
+      const messages = NATIVE_UI_MESSAGES[nativeUiLocale].purgeSource;
       const confirmation = await dialog.showMessageBox(parentWindow, {
         type: "warning",
-        title: "Confirm OhMyContext removal",
-        message: `Remove “${prepared.preview.name}” from OhMyContext?`,
-        detail:
-          `This removes ${prepared.preview.documentCount} indexed document(s) and their stored lineage. ` +
-          "The original folder remains unchanged.",
-        buttons: ["Keep source", "Remove local copy"],
+        title: messages.title,
+        message: messages.message(prepared.preview.name),
+        detail: messages.detail(prepared.preview.documentCount),
+        buttons: [messages.keep, messages.confirm],
         defaultId: 0,
         cancelId: 0,
         noLink: true,

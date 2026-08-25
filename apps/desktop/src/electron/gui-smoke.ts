@@ -229,17 +229,23 @@ function renderGuiJourneyScript(): string {
     }
     throw new Error('Timed out waiting for ' + label + '.');
   };
-  const buttonWithText = (selector, text) => {
-    const buttons = Array.from(document.querySelectorAll(selector));
-    return buttons.find((button) =>
-      button instanceof HTMLButtonElement &&
-      !button.disabled &&
-      button.innerText.trim() === text
-    );
+  const enabledButtonWithTestId = (testId) => {
+    const button = document.querySelector('[data-testid="' + testId + '"]');
+    return button instanceof HTMLButtonElement && !button.disabled ? button : undefined;
   };
+  const localeSelect = await waitFor('the locale selector', () => {
+    const select = document.querySelector('[data-testid="locale-select"]');
+    return select instanceof HTMLSelectElement ? select : undefined;
+  });
+  if (localeSelect.value !== 'en') {
+    localeSelect.value = 'en';
+    localeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  await waitFor('the library navigation', () => enabledButtonWithTestId('nav-library'));
 
   await waitFor('the first-run sample action', () =>
-    buttonWithText('.empty-actions button', 'Try sample library')
+    enabledButtonWithTestId('import-sample')
   ).then((button) => button.click());
 
   const searchInput = await waitFor('the imported sample and suggested query', () => {
@@ -247,7 +253,7 @@ function renderGuiJourneyScript(): string {
     const sampleSourceReady = sourceNames.some((element) =>
       element instanceof HTMLElement && element.innerText.trim() === expectedSourceLabel
     );
-    const input = document.querySelector('input[aria-label="Search personal context"]');
+    const input = document.querySelector('[data-testid="search-input"]');
     const submit = document.querySelector('form.search button[type="submit"]');
     if (
       sampleSourceReady &&
@@ -281,13 +287,14 @@ function renderGuiJourneyScript(): string {
   });
 
   await waitFor('the AI connections navigation', () =>
-    buttonWithText('nav button', 'AI connections')
+    enabledButtonWithTestId('nav-connections')
   ).then((button) => button.click());
 
   const connectionCards = await waitFor('the read-only AI connection preview', () => {
-    const codex = document.querySelector('[aria-label="Codex connection"]');
-    const claudeCode = document.querySelector('[aria-label="Claude Code connection"]');
-    const boundary = document.querySelector('[aria-label="Current data boundary"]');
+    const cards = Array.from(document.querySelectorAll('.connection-card'));
+    const codex = cards.find((card) => card.querySelector('.client-icon')?.textContent?.trim() === 'CX');
+    const claudeCode = cards.find((card) => card.querySelector('.client-icon')?.textContent?.trim() === 'CC');
+    const boundary = document.querySelector('[data-testid="data-boundary"]');
     const boundaryText = boundary instanceof HTMLElement ? boundary.innerText : '';
     if (
       codex instanceof HTMLElement &&
@@ -300,14 +307,14 @@ function renderGuiJourneyScript(): string {
   });
 
   await waitFor('the access history navigation', () =>
-    buttonWithText('nav button', 'Access history')
+    enabledButtonWithTestId('nav-history')
   ).then((button) => button.click());
 
   const historyScreen = await waitFor('the content-free desktop access entry', () => {
     const desktopEntry = document.querySelector('.history-entry .history-client.desktop');
     const privacyNote = document.querySelector('.history-privacy-note');
-    const refreshButton = buttonWithText('button', 'Refresh history');
-    const boundary = document.querySelector('[aria-label="Current data boundary"]');
+    const refreshButton = document.querySelector('.history-actions button.secondary:not(.danger-text)');
+    const boundary = document.querySelector('[data-testid="data-boundary"]');
     const privacyText = privacyNote instanceof HTMLElement ? privacyNote.innerText : '';
     const boundaryText = boundary instanceof HTMLElement ? boundary.innerText : '';
     if (
