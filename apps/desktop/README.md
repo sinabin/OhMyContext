@@ -72,13 +72,13 @@ arbitrary path or provenance URI. This trusted override is reserved for the
 built-in sample and does not create a general provenance-rewrite API for normal
 imports.
 
-## Windows x64 unsigned installer
+## Windows x64 Portable ZIP
 
-On a Windows x64 build host, create installer-form developer-preview artifacts
-with the official Electron Forge Squirrel.Windows maker:
+On a Windows x64 build host, create the packaged application directory used by
+the Portable ZIP release:
 
 ```sh
-npm run make --workspace @owncontext/desktop
+npm run package:win --workspace @owncontext/desktop
 ```
 
 The command compiles the monorepo, bundles the desktop main/preload code and the
@@ -90,10 +90,11 @@ finally runs the packaged smoke test. After those checks pass, it generates and
 re-verifies a source-bound draft release bundle. Outputs are created under a
 unique `apps/desktop/out/unsigned-*` directory.
 
-The generated preview has no payment or license-key gate and does not require
-Node.js on the target Windows x64 machine. That technical ability to make and
-run a free EXE does not grant public redistribution rights while the project
-license is unresolved.
+The generated Portable ZIP has no payment or license-key gate and does not
+require Node.js on the target Windows x64 machine. Authenticode signing,
+installer packaging, and automatic updates are intentionally out of scope.
+Windows may show an Unknown Publisher or SmartScreen warning; use
+non-sensitive data and verify the GitHub release SHA-256 sidecar.
 
 The unpacked application and the `.nupkg` both contain
 `resources/compliance/THIRD_PARTY_NOTICES.txt`, `SBOM.spdx.json`, and
@@ -182,25 +183,23 @@ to the `.nupkg`, while setup/update bootstrap components live outside the
 verified application payload. Complete license, SBOM/notices, and release
 checksum coverage for that maker layer remain public-release gates.
 
-Expected maker outputs include:
+For local Forge smoke coverage, maker outputs include (these are not the
+public distribution format):
 
 - `OhMyContext-Developer-Preview-Unsigned-Setup.exe` — per-user Squirrel setup;
 - `OhMyContextDeveloperPreview-0.0.0-full.nupkg` — unsigned Squirrel package; and
 - `RELEASES` — local Squirrel metadata, not an enabled update channel.
 
-Every package also includes `UNSIGNED-DEVELOPER-PREVIEW.txt`. These artifacts
-are deliberately unsigned, use no publisher or update configuration, and are
-for private non-sensitive evaluation only. Do not publicly redistribute them:
-the project license remains undecided. Windows can show Unknown Publisher or
-SmartScreen warnings. This build target does not satisfy the public-release
-security gates below.
+Every package also includes `UNSIGNED-DEVELOPER-PREVIEW.txt`. The public
+Portable ZIP carries the same deliberate unsigned and non-sensitive-data
+boundary. Windows can show Unknown Publisher or SmartScreen warnings; this
+distribution does not claim Authenticode or encrypted-vault security
+certification.
 
-`.github/workflows/alpha-ci.yml` repeats the complete check and make chain on a
-Windows runner with read-only repository permission. It has no release or
-attestation permission. The unsigned binary bundle is uploaded only when the
-repository is private and is retained for three days; if the repository is
-public, the workflow verifies the build without publishing its executable as a
-workflow artifact.
+`.github/workflows/portable-preview.yml` repeats the package chain on a
+disposable GitHub-hosted Windows runner and publishes the Portable ZIP and
+SHA-256 sidecar to a GitHub pre-release. It does not publish an installer,
+Authenticode signature, or automatic update channel.
 
 The MCP connection deliberately sets `ELECTRON_RUN_AS_NODE=1` for the packaged
 executable because a Windows GUI-subsystem Electron process does not provide a

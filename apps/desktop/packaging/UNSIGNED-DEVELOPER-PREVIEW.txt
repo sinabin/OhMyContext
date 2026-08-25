@@ -1,12 +1,15 @@
-OhMyContext Developer Preview — UNSIGNED
+OhMyContext Windows Portable ZIP — UNSIGNED
 
-This artifact is an unsigned developer preview, not a public consumer release.
-It is intended only for non-sensitive evaluation data. Windows may display an
-Unknown Publisher or SmartScreen warning.
+This artifact is the intentionally unsigned Windows x64 Portable ZIP
+distribution. Extract the ZIP and run OhMyContextDeveloperPreview.exe. Windows
+may display an Unknown Publisher or SmartScreen warning. Use non-sensitive
+evaluation data only.
 
 The current vault is not protected by application-level encryption. Retrieved
 excerpts can leave the computer when an AI client sends them to a cloud model.
-There is no automatic updater, release signature, or consumer support promise.
+There is no automatic updater or installer. Verify the release tag and the
+published SHA-256 sidecar before running it.
 
-The project has not selected an open-source license. This artifact must not be
-publicly redistributed until the maintainer chooses distribution terms.
+The project license and contribution terms are tracked separately from this
+binary distribution. Do not present this unsigned build as a security-certified
+or encrypted product.

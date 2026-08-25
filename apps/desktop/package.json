@@ -3,7 +3,7 @@
   "productName": "OhMyContext Developer Preview",
   "version": "0.1.0",
   "private": true,
-  "description": "Unsigned local-first OhMyContext developer preview for non-sensitive evaluation data.",
+  "description": "Unsigned Windows x64 Portable ZIP distribution of the local-first OhMyContext app for non-sensitive evaluation data.",
   "author": "OhMyContext project contributors",
   "type": "module",
   "main": "dist-electron/main.js",

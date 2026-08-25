@@ -4,17 +4,22 @@ OhMyContext is a local-first personal context vault that turns user-controlled f
 
 Canonical repository: https://github.com/sinabin/OhMyContext
 
-The developer alpha now previews an eligible local-folder inventory before it
+The Windows x64 distribution is a free Portable ZIP: extract it and run the
+included executable. The app previews an eligible local-folder inventory before it
 atomically imports UTF-8 text and Markdown files, stores provenance in a local
 SQLite vault, searches the collection, exposes bounded `search` and `fetch` over
 a local MCP server, includes a non-sensitive built-in sample library, and
 provides desktop flows for reversible Codex and Claude Code configuration.
 
-It is not a public consumer release. Application-level encryption,
+The Portable ZIP is intentionally unsigned and has no installer or automatic
+updater; Windows may show an Unknown Publisher or SmartScreen warning. Use
+non-sensitive evaluation data only. Application-level encryption,
 handle-relative or equivalently reviewed folder traversal, collection-isolation
 side-channel validation, AI-client executable provenance checks, safe
-configuration-backup retention, signed packaging and updates, parser isolation,
-and license selection remain release gates. Use non-sensitive fixture data only.
+configuration-backup retention and parser isolation remain release gates;
+signed packaging and automatic updates are not part of the Portable ZIP
+distribution; license selection remains a separate open-source governance
+decision. Use non-sensitive fixture data only.
 
 ## Product principles
 
@@ -54,18 +59,16 @@ Launch the desktop developer alpha:
 npm start --workspace @owncontext/desktop
 ```
 
-The first development Electron invocation downloads its platform binary. An
-unsigned Windows x64 developer-preview installer is now produced with
-`npm run make --workspace @owncontext/desktop`; its users do not need Node.js.
-The preview has no payment or license-key gate and is suitable only for private,
-non-sensitive local evaluation. This is not a signed or publicly releasable
-package, and no public-release claim is made while the security and licensing
-gates remain open. A source-bound draft manifest and outer SHA-256 list now bind
-the local Setup, Squirrel package, compliance evidence, Git commit, lockfile,
-packaged synthetic Windows key-storage evidence, and Authenticode status. The
-read-only Windows alpha workflow re-verifies this bundle but never creates a
-GitHub Release; it uploads unsigned binaries only while the repository is
-private.
+The first development Electron invocation downloads its platform binary. A
+Windows x64 Portable ZIP build is produced with
+`npm run package:win --workspace @owncontext/desktop`; its users do not need
+Node.js. The preview has no payment or license-key gate and is suitable only
+for non-sensitive local evaluation. A source-bound draft manifest and outer
+SHA-256 list bind
+the local package, compliance evidence, Git commit, lockfile, packaged
+synthetic Windows key-storage evidence, and the unsigned status. The public
+GitHub workflow creates the Portable ZIP release and a SHA-256 sidecar; it does
+not provide an installer or automatic update channel.
 
 The core now requires every caller to select a storage provider explicitly. The
 normal desktop and MCP routes still select `node-sqlite-development` with a
@@ -115,7 +118,7 @@ the compatibility probe/open race against an external writer.
 | Read-only local stdio MCP | Implemented and real-protocol tested |
 | Desktop import, sample onboarding, search, source removal, access history, and Codex/Claude Code config | Developer alpha |
 | Encrypted provider, pinned Windows runtime, key lifecycle, and packaged reopen/canary smoke | Developer candidate verified in isolation; normal desktop/MCP vault remains plaintext |
-| Portable `.ownctx`, global service connectors, encryption, signed release | Planned |
+| Portable `.ownctx`, global service connectors, encryption | Planned |
 
 Each desktop-managed MCP launch is currently pinned to the single `default`
 collection. Requests for another collection are rejected, and `fetch` accepts
