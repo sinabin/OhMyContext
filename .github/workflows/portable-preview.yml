@@ -48,6 +48,10 @@ jobs:
           Push-Location node_modules/electron-winstaller
           try { node script/select-7z-arch.js } finally { Pop-Location }
 
+      - name: Install the pinned Electron runtime without running package scripts
+        shell: pwsh
+        run: node node_modules/electron/install.js
+
       - name: Build and smoke-test the unsigned developer package
         run: npm run package:win --workspace @owncontext/desktop
 
